@@ -6,6 +6,14 @@ Built with **Tauri v2**, **Rust**, and standard Web technologies, CachyDrive del
 
 ---
 
+## 📸 Screenshots
+
+| Dashboard (Live Sync Status & Activity) | Settings (Preferences & Rules) |
+|:---:|:---:|
+| ![CachyDrive Dashboard](screenshots/dashboard.png) | ![CachyDrive Settings](screenshots/settings.png) |
+
+---
+
 ## ✨ Features
 
 - **Two-Way Synchronization:** Keeps your local `~/GoogleDrive` folder and Google Drive cloud storage in sync using `rclone bisync`.
