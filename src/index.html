@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>CachyDrive Pro</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="app-container">
+    
+    <aside class="sidebar">
+      <div class="logo-container">
+        <h1 class="logo">Cachy<span class="purple-accent">Drive</span></h1>
+      </div>
+      
+      <nav class="nav-menu">
+        <button class="nav-btn active" data-i18n="nav_dashboard">Dashboard</button>
+        <button class="nav-btn" data-i18n="nav_history">Activity History</button>
+        <button class="nav-btn" data-i18n="nav_settings">Settings</button>
+      </nav>
+      
+      <div class="sidebar-actions">
+        <button class="btn blue-btn" id="sync-btn" data-i18n="btn_sync">Sync Now</button>
+        <button class="btn red-btn" id="stop-btn" data-i18n="btn_stop">Stop</button>
+      </div>
+    </aside>
+
+    <main class="main-content">
+      
+      <div id="view-dashboard" class="view-page">
+        <header class="top-bar">
+          <h2 data-i18n="dashboard_title">Dashboard</h2>
+          <div class="status-badge" id="status-badge">
+            <span class="dot green-dot"></span> <span id="status-badge-text" data-i18n="status_active">System Active</span>
+          </div>
+        </header>
+
+        <div class="dashboard-cards">
+          <div class="card">
+            <h3 data-i18n="sync_status_title">Synchronization Status</h3>
+            <p class="text-muted" id="status-desc" data-i18n="sync_status_desc_idle">All files are safe and up to date.</p>
+            <p id="scan-counter" class="scan-counter" style="display:none"></p>
+            <div class="progress-bar-bg">
+              <div class="progress-bar yellow-bar" style="width: 0%;"></div>
+            </div>
+            <div class="live-stats-grid">
+              <div class="stat-box">
+                <span class="stat-label" data-i18n="stat_transferred_size">Transferred Size</span>
+                <span class="stat-value" id="stat-size" data-i18n="stat_idle">Idle</span>
+              </div>
+              <div class="stat-box">
+                <span class="stat-label" data-i18n="stat_transfer_speed">Transfer Speed</span>
+                <span class="stat-value" id="stat-speed" data-i18n="stat_idle">Idle</span>
+              </div>
+              <div class="stat-box">
+                <span class="stat-label" data-i18n="stat_remaining_time">Remaining Time</span>
+                <span class="stat-value" id="stat-eta">-</span>
+              </div>
+              <div class="stat-box">
+                <span class="stat-label" data-i18n="stat_status">Status</span>
+                <span class="stat-value" id="stat-percent">0%</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="card log-card">
+            <h3 data-i18n="recent_activity_title">Recent Activity</h3>
+            <ul class="log-list">
+              <li class="log-entry log-system" style="background: transparent; border-left: 3px solid #80868B;">
+                <span class="log-time" id="initial-log-time">--:--:--</span>
+                <span class="log-badge" style="background:#80868B" data-i18n="log_badge_system">SYSTEM</span>
+                <span class="log-icon" style="color:#80868B">◈</span>
+                <span class="log-message" style="color:#80868B; font-weight:400" data-i18n="log_ui_started">Interface initialized.</span>
+              </li>
+            </ul>
+          </div>
+        </div>
+      </div>
+
+      <div id="view-history" class="view-page" style="display: none;">
+        <header class="top-bar">
+          <h2 data-i18n="history_title">Activity History</h2>
+          <button id="clear-history-btn" class="btn" style="background-color: #F1F3F4; color: var(--text-main); font-size: 13px; font-weight: 500; padding: 8px 16px; border: 1px solid var(--border-color); border-radius: 8px;" data-i18n="btn_clear_history">Clear History</button>
+        </header>
+        <div class="card log-card" style="height: 70vh; overflow-y: auto;">
+          <h3 data-i18n="all_records_title">All Records</h3>
+          <p class="text-muted" data-i18n="all_records_desc">Recent synchronization steps and file activities are listed here.</p>
+          <ul class="log-list" id="full-log-list">
+          </ul>
+        </div>
+      </div>
+
+      <div id="view-settings" class="view-page" style="display: none;">
+        <header class="top-bar">
+          <h2 data-i18n="settings_title">Settings</h2>
+        </header>
+        
+        <div class="card settings-card">
+          <h3 data-i18n="sync_prefs_title">Sync Preferences</h3>
+          
+          <div class="settings-group">
+            <label for="app-language" data-i18n="label_language">App Language / Dil</label>
+            <select id="app-language" class="form-control">
+              <option value="en" selected>English</option>
+              <option value="tr">Türkçe</option>
+            </select>
+          </div>
+
+          <div class="settings-group">
+            <label for="auto-start" data-i18n="label_autostart">On Application Startup</label>
+            <select id="auto-start" class="form-control">
+              <option value="false" data-i18n="opt_manual_start">Manual Start (Only when clicked)</option>
+              <option value="true" data-i18n="opt_auto_sync">Automatically Synchronize</option>
+            </select>
+          </div>
+
+          <div class="settings-group">
+            <label for="sync-interval" data-i18n="label_interval">Sync Frequency</label>
+            <select id="sync-interval" class="form-control">
+              <option value="300" data-i18n="opt_interval_5m">Every 5 Minutes (Recommended)</option>
+              <option value="600" data-i18n="opt_interval_10m">Every 10 Minutes</option>
+              <option value="1800" data-i18n="opt_interval_30m">Every 30 Minutes</option>
+              <option value="manual" data-i18n="opt_interval_manual">Manual Only</option>
+            </select>
+          </div>
+
+          <div class="settings-group">
+            <label for="conflict-rule" data-i18n="label_conflict">Conflict Resolution Rule</label>
+            <select id="conflict-rule" class="form-control">
+              <option value="newer" data-i18n="opt_conflict_newer">Always Keep Newer File</option>
+              <option value="local" data-i18n="opt_conflict_local">Always Keep Local File</option>
+              <option value="remote" data-i18n="opt_conflict_remote">Always Keep Cloud File</option>
+            </select>
+          </div>
+
+          <div class="settings-group">
+            <label for="local-path" data-i18n="label_local_path">Local Folder Path</label>
+            <input type="text" id="local-path" class="form-control" value="~/GoogleDrive" readonly />
+            <small class="form-help" data-i18n="help_local_path">This folder is continuously synced with Google Drive.</small>
+          </div>
+
+          <button class="btn purple-btn" id="save-settings-btn" style="width: 100%; margin-top: 10px;" data-i18n="btn_save_settings">Save Settings</button>
+        </div>
+      </div>
+
+    </main>
+
+  </div>
+  <script type="module" src="/main.js"></script>
+</body>
+</html>

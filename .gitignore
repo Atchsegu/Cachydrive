@@ -1,0 +1,36 @@
+# Node & Paket Yöneticileri
+node_modules/
+dist/
+dist-ssr/
+*.local
+
+# Günlük (Log) Dosyaları
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Rust / Cargo Derleme Çıktıları (Boyutu şişiren ana yer)
+target/
+**/target/
+src-tauri/target/
+
+# Derlenmiş Paketler ve Kurulum Dosyaları (100MB+ dosyalar repoya girmemeli)
+*.AppImage
+*.deb
+*.rpm
+*.tar.gz
+*.dmg
+*.exe
+*.msi
+
+# Editör ve İşletim Sistemi Geçici Dosyaları
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store
+Thumbs.db
+*.sw?
+*~
