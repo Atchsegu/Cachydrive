@@ -155,6 +155,14 @@ If you wish to modify or compile CachyDrive yourself:
 
 ---
 
+## 💡 About & Authorship
+
+This project is the result of modern **Agentic AI Coding** driven by dedicated human vision and craftsmanship. 
+
+While advanced AI agents assisted in code generation and technical iteration, the overall architecture, user experience design, `rclone bisync` integration logic, real-world edge-case handling (lock cleanups, process management), and extensive testing were passionately directed, fine-tuned, and shaped through substantial personal effort by the author. It exemplifies how domain professionals can harness AI to build robust, production-grade tools tailored to real-world workflows.
+
+---
+
 ## 📄 License
 
 This project is licensed under the **MIT License** — see the [LICENSE](LICENSE) file for details.
