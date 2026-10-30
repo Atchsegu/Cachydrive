@@ -262,6 +262,54 @@ fn update_tray_lang(app: tauri::AppHandle, lang: String) -> Result<(), String> {
     Ok(())
 }
 
+// 4. İlgili Yerel Google Drive Klasörünü Dosya Yöneticisinde Açma Komutu
+#[tauri::command]
+fn open_in_folder(rel_path: String) -> Result<(), String> {
+    let home = std::env::var("HOME").map_err(|_| "HOME dizini bulunamadı.".to_string())?;
+    let base_dir = std::path::PathBuf::from(&home).join("GoogleDrive");
+
+    // Güvenlik: '..' gibi üst dizine çıkış girişimlerini filtrele
+    let clean_rel: std::path::PathBuf = std::path::Path::new(&rel_path)
+        .components()
+        .filter(|c| matches!(c, std::path::Component::Normal(_)))
+        .collect();
+
+    let target_path = base_dir.join(&clean_rel);
+
+    // Hedef doğrudan mevcut bir klasörse onu aç; dosyaysa veya silinmişse üst klasörünü bul
+    let mut dir_to_open = if target_path.is_dir() {
+        target_path
+    } else {
+        target_path
+            .parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| base_dir.clone())
+    };
+
+    // Silinmiş alt klasörler varsa mevcut olan en yakın üst klasöre kadar çık
+    while !dir_to_open.exists() && dir_to_open.starts_with(&base_dir) {
+        if let Some(parent) = dir_to_open.parent() {
+            dir_to_open = parent.to_path_buf();
+        } else {
+            break;
+        }
+    }
+
+    if !dir_to_open.exists() || !dir_to_open.starts_with(&base_dir) {
+        let _ = std::fs::create_dir_all(&base_dir);
+        dir_to_open = base_dir;
+    }
+
+    Command::new("xdg-open")
+        .arg(&dir_to_open)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|e| format!("Klasör açılamadı: {}", e))?;
+
+    Ok(())
+}
+
 fn main() {
     let sync_pid = Arc::new(Mutex::new(None));
     let tray_sync_pid = Arc::clone(&sync_pid);
@@ -328,7 +376,12 @@ fn main() {
                 api.prevent_close(); // Uygulamanın ölmesini engeller
             }
         })
-        .invoke_handler(tauri::generate_handler![run_rclone_sync, stop_rclone_sync, update_tray_lang])
+        .invoke_handler(tauri::generate_handler![
+            run_rclone_sync,
+            stop_rclone_sync,
+            update_tray_lang,
+            open_in_folder
+        ])
         .run(tauri::generate_context!())
         .expect("Tauri uygulaması başlatılırken hata oluştu");
 }

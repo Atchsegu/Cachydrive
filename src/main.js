@@ -129,6 +129,120 @@ function getBaseName(path) {
   return path.replace(/\/$/, '').split('/').pop() || path;
 }
 
+/** Verilen göreli yoldan ilgili Google Drive klasör yolunu döndürür */
+function getFolderDisplayPath(relPath, isDir = false) {
+  if (!relPath) return '~/GoogleDrive/';
+  const cleaned = relPath.replace(/^\/+|\/+$/g, '');
+  if (!cleaned) return '~/GoogleDrive/';
+  if (isDir) {
+    return `~/GoogleDrive/${cleaned}/`;
+  }
+  const lastSlash = cleaned.lastIndexOf('/');
+  if (lastSlash === -1) {
+    return '~/GoogleDrive/';
+  }
+  return `~/GoogleDrive/${cleaned.substring(0, lastSlash)}/`;
+}
+
+// --- YÜZEN KLASÖR YOLU BALONCUĞU (TOOLTIP) VE TIKLAMA YÖNETİMİ ---
+const pathTooltip = document.createElement('div');
+pathTooltip.id = 'path-tooltip';
+pathTooltip.className = 'path-tooltip';
+pathTooltip.setAttribute('role', 'tooltip');
+pathTooltip.hidden = true;
+document.body.appendChild(pathTooltip);
+
+function showPathTooltip(linkEl) {
+  const relPath = linkEl.dataset.relPath;
+  if (!relPath) return;
+  const isDir = linkEl.dataset.isDir === 'true';
+  const folderPath = getFolderDisplayPath(relPath, isDir);
+
+  pathTooltip.textContent = '';
+  const folderSpan = document.createElement('span');
+  folderSpan.textContent = `📁 ${folderPath}`;
+  const hintSpan = document.createElement('span');
+  hintSpan.className = 'tooltip-hint';
+  hintSpan.textContent = `• ${t('tooltip_open_folder')}`;
+  pathTooltip.appendChild(folderSpan);
+  pathTooltip.appendChild(hintSpan);
+
+  pathTooltip.hidden = false;
+
+  const rect = linkEl.getBoundingClientRect();
+  const tipRect = pathTooltip.getBoundingClientRect();
+
+  let top = rect.top - tipRect.height - 6;
+  if (top < 8) {
+    top = rect.bottom + 6;
+  }
+  const left = Math.max(8, Math.min(rect.left, window.innerWidth - tipRect.width - 8));
+
+  pathTooltip.style.top = `${top}px`;
+  pathTooltip.style.left = `${left}px`;
+}
+
+function hidePathTooltip() {
+  pathTooltip.hidden = true;
+}
+
+document.addEventListener('pointerover', (e) => {
+  const linkEl = e.target.closest('.log-link[data-rel-path]');
+  if (linkEl) {
+    showPathTooltip(linkEl);
+  }
+});
+
+document.addEventListener('pointerout', (e) => {
+  const linkEl = e.target.closest('.log-link[data-rel-path]');
+  if (linkEl && !linkEl.contains(e.relatedTarget)) {
+    hidePathTooltip();
+  }
+});
+
+document.addEventListener('focusin', (e) => {
+  const linkEl = e.target.closest('.log-link[data-rel-path]');
+  if (linkEl) {
+    showPathTooltip(linkEl);
+  }
+});
+
+document.addEventListener('focusout', (e) => {
+  const linkEl = e.target.closest('.log-link[data-rel-path]');
+  if (linkEl) {
+    hidePathTooltip();
+  }
+});
+
+document.addEventListener('scroll', hidePathTooltip, true);
+
+document.addEventListener('click', (e) => {
+  const linkEl = e.target.closest('.log-link[data-rel-path]');
+  if (linkEl) {
+    const relPath = linkEl.dataset.relPath;
+    if (relPath) {
+      invoke('open_in_folder', { relPath }).catch(() => {});
+    }
+  }
+});
+
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') {
+    hidePathTooltip();
+    return;
+  }
+  if (e.key === 'Enter' || e.key === ' ') {
+    const linkEl = e.target.closest('.log-link[data-rel-path]');
+    if (linkEl) {
+      e.preventDefault();
+      const relPath = linkEl.dataset.relPath;
+      if (relPath) {
+        invoke('open_in_folder', { relPath }).catch(() => {});
+      }
+    }
+  }
+});
+
 /** rclone log satırını parse eder */
 function parseRcloneLine(line) {
   let clean = line.replace(/^\d{4}\/\d{2}\/\d{2} \d{2}:\d{2}:\d{2} /, '').trim();
@@ -154,7 +268,7 @@ function parseRcloneLine(line) {
 }
 
 /** Log listesine zengin görsel girdi ekler (XSS korumalı textContent kullanımı) */
-function addLog(message, type = 'system') {
+function addLog(message, type = 'system', relPath = null, isDir = false) {
   const time = getCurrentTime();
   const logTypes = getLogTypes();
   const tInfo = logTypes[type] || logTypes['system'];
@@ -174,7 +288,16 @@ function addLog(message, type = 'system') {
     <span class="log-message" style="color:${tInfo.color}; font-weight:${tInfo.bold ? 700 : 400}"></span>
   `;
   const msgEl = li.querySelector('.log-message');
-  if (msgEl) msgEl.textContent = message;
+  if (msgEl) {
+    msgEl.textContent = message;
+    if (relPath) {
+      msgEl.classList.add('log-link');
+      msgEl.dataset.relPath = relPath;
+      msgEl.dataset.isDir = isDir ? 'true' : 'false';
+      msgEl.tabIndex = 0;
+      msgEl.setAttribute('role', 'button');
+    }
+  }
 
   // Ana panoya ekle ve üst sınırı koru
   if (dashboardLogList) {
@@ -350,23 +473,23 @@ listen('rclone-log', (event) => {
 
   if (action) {
     if (action.includes('Copied (new)')) {
-      addLog(name || path, isDir ? 'folder-new' : 'file-new');
+      addLog(name || path, isDir ? 'folder-new' : 'file-new', path, isDir);
     } else if (action.includes('Copied (replaced existing)') || action.includes('server-side copy')) {
-      addLog(name || path, 'file-update');
+      addLog(name || path, 'file-update', path, isDir);
     } else if (action.includes('Deleted') && !action.includes('directory')) {
-      addLog(name || path, 'file-del');
+      addLog(name || path, 'file-del', path, false);
     } else if (action.includes('Deleted') && action.includes('directory')) {
-      addLog(name || path, 'folder-del');
+      addLog(name || path, 'folder-del', path, true);
     } else if (action.includes('Created directory') || action.includes('mkdir')) {
-      addLog(name || path, 'folder-new');
+      addLog(name || path, 'folder-new', path, true);
     } else if (action.includes('Removed directory') || action.includes('rmdir')) {
-      addLog(name || path, 'folder-del');
+      addLog(name || path, 'folder-del', path, true);
     } else if (action.includes('Moved') || action.includes('moved')) {
-      addLog((name || path) + t('msg_moved_suffix'), 'file-update');
+      addLog((name || path) + t('msg_moved_suffix'), 'file-update', path, isDir);
     } else if (level === 'ERROR' || action.toLowerCase().includes('failed') || action.toLowerCase().includes('error')) {
-      addLog(`${name || path}: ${action}`, 'error');
+      addLog(`${name || path}: ${action}`, 'error', path, isDir);
     } else if (action.toLowerCase().includes('conflict')) {
-      addLog(`${t('msg_conflict_prefix')}${name || path}`, 'error');
+      addLog(`${t('msg_conflict_prefix')}${name || path}`, 'error', path, isDir);
     }
   } else {
     if (message.includes('Bisync successful')) {

@@ -18,6 +18,7 @@ Built with **Tauri v2**, **Rust**, and standard Web technologies, CachyDrive del
 
 - **Two-Way Synchronization:** Keeps your local `~/GoogleDrive` folder and Google Drive cloud storage in sync using `rclone bisync`.
 - **Live Transfer Dashboard:** Monitor real-time upload/download speeds, transferred data size, remaining time (ETA), and progress percentage.
+- **Interactive Activity Logs:** Hover over any synced file or folder in the activity list to view its exact Google Drive directory path, or click it to open the containing local folder directly in your file manager.
 - **Intelligent Conflict Resolution:** Choose how file conflicts are handled:
   - *Keep Newer (Default)*: The latest modified file wins.
   - *Keep Local*: Prioritize your local changes.

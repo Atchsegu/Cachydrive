@@ -89,6 +89,7 @@ export const translations = {
     msg_warning: "Uyarı: ",
     msg_moved_suffix: " → taşındı",
     msg_conflict_prefix: "Çakışma: ",
+    tooltip_open_folder: "Klasörü açmak için tıklayın",
 
     // Counter helpers
     cnt_listed_and_checked: (listed, total, cur) => `${listed} / ${total} (tahmini) öğe listelendi, ${cur} kontrol edildi`,
@@ -188,6 +189,7 @@ export const translations = {
     msg_warning: "Warning: ",
     msg_moved_suffix: " → moved",
     msg_conflict_prefix: "Conflict: ",
+    tooltip_open_folder: "Click to open folder",
 
     // Counter helpers
     cnt_listed_and_checked: (listed, total, cur) => `${listed} / ${total} (est.) items listed, ${cur} checked`,

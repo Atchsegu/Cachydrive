@@ -244,6 +244,48 @@ body {
   white-space: nowrap;
 }
 
+.log-link {
+  cursor: pointer;
+  justify-self: start;
+  max-width: 100%;
+  border-radius: 4px;
+  padding: 1px 4px;
+  margin-left: -4px;
+  transition: background-color 0.15s, text-decoration-color 0.15s;
+}
+
+.log-link:hover,
+.log-link:focus-visible {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  background-color: rgba(103, 58, 183, 0.08);
+  outline: none;
+}
+
+/* Yüzen Klasör Yolu Baloncuğu (Tooltip) */
+.path-tooltip {
+  position: fixed;
+  z-index: 9999;
+  background-color: #202124;
+  color: #FFFFFF;
+  padding: 6px 10px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.4;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.22);
+  pointer-events: none;
+  white-space: nowrap;
+  max-width: 90vw;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.path-tooltip .tooltip-hint {
+  color: #BDC1C6;
+  font-weight: 400;
+  margin-left: 6px;
+}
+
 /* Tarama sayacı */
 .scan-counter {
   font-size: 12px;
