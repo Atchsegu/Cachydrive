@@ -1,10 +1,10 @@
-name: Build and Upload AppImage Release
+name: Build, Verify, and Release AppImage
 
 on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Release tag to upload to (e.g. v0.2.0)'
+        description: 'Release tag (e.g. v0.2.0)'
         required: true
         default: 'v0.2.0'
   release:
@@ -15,32 +15,76 @@ permissions:
 
 jobs:
   build-appimage:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:base-devel
+    env:
+      APPIMAGE_EXTRACT_AND_RUN: 1
+      NO_STRIP: true
+      WEBKIT_DISABLE_DMABUF_RENDERER: 1
+      WEBKIT_DISABLE_COMPOSITING_MODE: 1
     steps:
+      - name: Install Arch Linux dependencies
+        run: |
+          pacman -Syu --noconfirm \
+            git curl wget file base-devel \
+            webkit2gtk-4.1 gtk3 librsvg libayatana-appindicator \
+            libxdo openssl squashfs-tools fuse2 \
+            nodejs npm rust github-cli \
+            xorg-server-xvfb imagemagick python
+
       - name: Checkout repository
         uses: actions/checkout@v4
-
-      - name: Install Linux dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
 
       - name: Install frontend dependencies and build AppImage
         run: |
           npm install
           npx tauri build --bundles appimage
 
-      - name: Upload AppImage to GitHub Release
+      - name: Verify AppImage launches and renders UI (No Blank Grey Screen)
+        run: |
+          APPIMAGE_PATH=$(ls src-tauri/target/release/bundle/appimage/*.AppImage | head -n 1)
+          echo "Testing AppImage: $APPIMAGE_PATH"
+          chmod +x "$APPIMAGE_PATH"
+
+          xvfb-run -a -s "-screen 0 1024x768x24" bash -c "
+            \"$APPIMAGE_PATH\" > /tmp/cachydrive_run.log 2>&1 &
+            APP_PID=\$!
+            sleep 6
+            if ! kill -0 \$APP_PID 2>/dev/null; then
+              echo 'ERROR: CachyDrive process exited prematurely!'
+              cat /tmp/cachydrive_run.log
+              exit 1
+            fi
+            magick import -window root /tmp/ui_screenshot.png
+            kill \$APP_PID 2>/dev/null || true
+          "
+
+          cat /tmp/cachydrive_run.log || true
+          magick identify -verbose /tmp/ui_screenshot.png | head -n 40
+
+          # Check that the screenshot contains multiple distinct UI colors (white card, purple logo/buttons, blue/red buttons)
+          COLORS=$(magick /tmp/ui_screenshot.png -format "%k" info:)
+          echo "Distinct rendered colors in window: $COLORS"
+          if [ "$COLORS" -lt 15 ]; then
+            echo "ERROR: Screenshot has too few colors ($COLORS) — window appears blank/grey!"
+            exit 1
+          fi
+          echo "UI render verification passed successfully!"
+
+      - name: Create Release and Upload Verified AppImage
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG="${{ github.event.inputs.tag || github.event.release.tag_name || 'v0.2.0' }}"
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" \
+              --target main \
+              --title "CachyDrive $TAG - Selective Sync & Local Space Saver" \
+              --notes "### ✨ What's New in $TAG
+          - **Selective Sync (Visual Folder & File Tree):** Browse your local and Google Drive folder hierarchy from the *Selective Sync* (*Klasör Seçimi*) tab with instant lazy-loading, real-time search filtering, and status badges (*Local*, *Cloud Only*, *Local & Cloud*, *Excluded*).
+          - **One-Click Cloud Scan:** Instantly loads local items and saved exclusion rules, with a **Scan Cloud** button to merge remote-only folders and files via \`rclone lsjson\`.
+          - **Optional Local Space Saver:** Optionally delete unchecked/excluded folders and files from your local \`~/GoogleDrive\` directory (with confirmation dialog) to free up disk space while keeping them 100% safe on Google Drive.
+          - **Linux / CachyOS WebKitGTK Rendering Fix:** Built natively on Arch Linux with \`WEBKIT_DISABLE_DMABUF_RENDERER=1\` to prevent DMA-BUF blank grey screen issues on Wayland/CachyOS."
+          fi
           gh release upload "$TAG" src-tauri/target/release/bundle/appimage/*.AppImage --clobber

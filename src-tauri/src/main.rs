@@ -738,6 +738,11 @@ fn save_excluded_items(
 }
 
 fn main() {
+    // Linux / Wayland / AppImage ortamlarında WebKitGTK DMA-BUF kaynaklı gri ekran sorununu önle
+    if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
+        std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+    }
+
     let sync_pid = Arc::new(Mutex::new(None));
     let tray_sync_pid = Arc::clone(&sync_pid);
 
@@ -814,4 +819,26 @@ fn main() {
         ])
         .run(tauri::generate_context!())
         .expect("Tauri uygulaması başlatılırken hata oluştu");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_sanitize_rel_path() {
+        assert_eq!(sanitize_rel_path("/Arsiv/Videolar/"), "Arsiv/Videolar");
+        assert_eq!(sanitize_rel_path("../../etc/passwd"), "etc/passwd");
+        assert_eq!(sanitize_rel_path(""), "");
+        assert_eq!(sanitize_rel_path("tek_dosya.txt"), "tek_dosya.txt");
+    }
+
+    #[test]
+    fn test_escape_rclone_glob() {
+        assert_eq!(escape_rclone_glob("Normal Klasor"), "Normal Klasor");
+        assert_eq!(
+            escape_rclone_glob("Yedek [2026] *test?"),
+            "Yedek \\[2026\\] \\*test\\?"
+        );
+    }
 }
