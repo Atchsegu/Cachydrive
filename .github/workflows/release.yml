@@ -26,10 +26,10 @@ jobs:
     steps:
       - name: Install Arch Linux dependencies
         run: |
-          pacman -Syu --noconfirm \
+          pacman -Syu --noconfirm --needed \
             git curl wget file base-devel \
             webkit2gtk-4.1 gtk3 librsvg libayatana-appindicator \
-            libxdo openssl squashfs-tools fuse2 \
+            xdotool openssl squashfs-tools fuse2 \
             nodejs npm rust github-cli \
             xorg-server-xvfb imagemagick python
 
