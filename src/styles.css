@@ -393,3 +393,275 @@ body {
   font-weight: 600;
   color: var(--noble-purple);
 }
+
+/* --- Klasör ve Dosya Seçimi (Görsel Klasör Ağacı) --- */
+.secondary-action-btn {
+  background-color: #F1F3F4;
+  color: var(--text-main);
+  font-size: 13px;
+  font-weight: 600;
+  padding: 8px 16px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+}
+
+.secondary-action-btn:hover {
+  background-color: #E8EAED;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08);
+}
+
+.selective-card {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  height: calc(100vh - 155px);
+  box-sizing: border-box;
+}
+
+.selective-header-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.exclusion-summary-badge {
+  background-color: rgba(103, 58, 183, 0.1);
+  color: var(--noble-purple);
+  font-size: 12px;
+  font-weight: 600;
+  padding: 5px 12px;
+  border-radius: 16px;
+  white-space: nowrap;
+}
+
+.exclusion-summary-badge.has-exclusions {
+  background-color: rgba(249, 171, 0, 0.14);
+  color: #B06000;
+}
+
+.tree-toolbar {
+  display: flex;
+  gap: 10px;
+}
+
+.tree-search-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px 12px;
+  font-size: 13px;
+}
+
+.folder-tree-container {
+  flex: 1;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background-color: #FAFAFA;
+  overflow-y: auto;
+  padding: 8px;
+}
+
+.tree-empty-msg,
+.tree-loading-msg {
+  color: var(--text-muted);
+  font-size: 13px;
+  padding: 18px 12px;
+  text-align: center;
+}
+
+.tree-node {
+  display: flex;
+  flex-direction: column;
+}
+
+.tree-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  font-size: 13px;
+  transition: background-color 0.12s;
+}
+
+.tree-row:hover {
+  background-color: rgba(103, 58, 183, 0.06);
+}
+
+.tree-row.is-excluded > .tree-item-name {
+  color: var(--text-muted);
+  text-decoration: line-through;
+}
+
+.tree-toggle-btn {
+  width: 22px;
+  height: 22px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 12px;
+  cursor: pointer;
+  border-radius: 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  flex-shrink: 0;
+}
+
+.tree-toggle-btn:hover {
+  background-color: rgba(0, 0, 0, 0.07);
+  color: var(--text-main);
+}
+
+.tree-toggle-placeholder {
+  width: 22px;
+  height: 22px;
+  display: inline-block;
+  flex-shrink: 0;
+}
+
+.tree-checkbox {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--noble-purple);
+  cursor: pointer;
+  margin: 0;
+  flex-shrink: 0;
+}
+
+.tree-icon {
+  font-size: 15px;
+  flex-shrink: 0;
+}
+
+.tree-item-name {
+  flex: 1;
+  font-weight: 500;
+  color: var(--text-main);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.tree-item-size {
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.tree-pill {
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 7px;
+  border-radius: 10px;
+  white-space: nowrap;
+  letter-spacing: 0.2px;
+}
+
+.pill-local {
+  background-color: #E6F4EA;
+  color: var(--google-green);
+}
+
+.pill-cloud {
+  background-color: rgba(26, 115, 232, 0.12);
+  color: var(--google-blue);
+}
+
+.pill-excluded {
+  background-color: rgba(217, 48, 37, 0.12);
+  color: var(--google-red);
+}
+
+.tree-children {
+  padding-left: 22px;
+  border-left: 1px dashed #DADCE0;
+  margin-left: 10px;
+}
+
+.selective-footer {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border-color);
+}
+
+.delete-local-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text-main);
+  cursor: pointer;
+}
+
+.delete-local-option input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--google-red);
+  cursor: pointer;
+  margin: 0;
+  flex-shrink: 0;
+}
+
+/* --- Onay Penceresi (Modal) --- */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background-color: rgba(32, 33, 36, 0.55);
+  z-index: 10000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+
+.modal-backdrop[hidden] {
+  display: none !important;
+}
+
+.modal-dialog {
+  background-color: var(--bg-white);
+  border-radius: 12px;
+  max-width: 480px;
+  width: 100%;
+  padding: 24px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.modal-dialog h3 {
+  margin: 0;
+  font-size: 18px;
+  color: var(--google-red);
+}
+
+.modal-delete-list {
+  margin: 0;
+  padding: 10px 14px 10px 28px;
+  background-color: #FFF8F7;
+  border: 1px solid rgba(217, 48, 37, 0.25);
+  border-radius: 8px;
+  max-height: 180px;
+  overflow-y: auto;
+  font-size: 13px;
+  color: var(--text-main);
+}
+
+.modal-delete-list li {
+  padding: 3px 0;
+  word-break: break-all;
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 6px;
+}

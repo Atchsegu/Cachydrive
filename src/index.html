@@ -16,6 +16,7 @@
       
       <nav class="nav-menu">
         <button class="nav-btn active" data-i18n="nav_dashboard">Dashboard</button>
+        <button class="nav-btn" data-i18n="nav_selective_sync">Selective Sync</button>
         <button class="nav-btn" data-i18n="nav_history">Activity History</button>
         <button class="nav-btn" data-i18n="nav_settings">Settings</button>
       </nav>
@@ -74,6 +75,35 @@
                 <span class="log-message" style="color:#80868B; font-weight:400" data-i18n="log_ui_started">Interface initialized.</span>
               </li>
             </ul>
+          </div>
+        </div>
+      </div>
+
+      <div id="view-selective" class="view-page" style="display: none;">
+        <header class="top-bar">
+          <h2 data-i18n="selective_title">Selective Sync</h2>
+          <button id="scan-cloud-btn" class="btn secondary-action-btn" data-i18n="btn_scan_cloud">☁ Scan Cloud</button>
+        </header>
+
+        <div class="card selective-card">
+          <div class="selective-header-row">
+            <p class="text-muted" style="margin: 0;" data-i18n="selective_desc">Check the folders and files you want to synchronize. Unchecked items will be ignored during sync.</p>
+            <span id="exclusion-summary-badge" class="exclusion-summary-badge">All items are synchronized</span>
+          </div>
+
+          <div class="tree-toolbar">
+            <input type="text" id="tree-search-input" class="form-control tree-search-input" placeholder="Filter folders or files..." />
+          </div>
+
+          <div id="folder-tree-root" class="folder-tree-container" role="tree">
+          </div>
+
+          <div class="selective-footer">
+            <label class="delete-local-option" for="delete-local-checkbox">
+              <input type="checkbox" id="delete-local-checkbox" />
+              <span data-i18n="opt_delete_local_excluded">Also delete unchecked (excluded) items from my computer (Kept safe on Cloud, frees up disk space)</span>
+            </label>
+            <button class="btn purple-btn" id="apply-exclusions-btn" style="width: 100%;" data-i18n="btn_apply_exclusions">Apply Changes</button>
           </div>
         </div>
       </div>
@@ -147,6 +177,20 @@
     </main>
 
   </div>
+
+  <!-- Yerelden Silme Onay Penceresi (Modal) -->
+  <div id="delete-confirm-modal" class="modal-backdrop" hidden>
+    <div class="modal-dialog" role="dialog" aria-modal="true" aria-labelledby="modal-delete-title">
+      <h3 id="modal-delete-title" data-i18n="modal_delete_title">Confirm Local Copy Deletion</h3>
+      <p class="text-muted" data-i18n="modal_delete_desc">The following excluded items will be deleted from ~/GoogleDrive on your computer (they will remain safely on your Google Drive cloud):</p>
+      <ul id="modal-delete-list" class="modal-delete-list"></ul>
+      <div class="modal-actions">
+        <button id="modal-cancel-btn" class="btn secondary-action-btn" data-i18n="modal_btn_cancel">Cancel</button>
+        <button id="modal-confirm-btn" class="btn red-btn" data-i18n="modal_btn_confirm_delete">Yes, Delete Locally & Save</button>
+      </div>
+    </div>
+  </div>
+
   <script type="module" src="/main.js"></script>
 </body>
 </html>

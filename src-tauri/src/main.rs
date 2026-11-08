@@ -12,6 +12,179 @@ use tauri::Manager;
 /// Aktif çalışan rclone sürecinin PID değerini tutar
 struct SyncState(Arc<Mutex<Option<u32>>>);
 
+/// Senkronizasyondan hariç tutulan klasör veya dosya bilgisi
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq, Eq)]
+struct ExcludedItem {
+    path: String,
+    is_dir: bool,
+}
+
+/// Görsel klasör ağacındaki her bir satırın verisi
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+struct TreeItem {
+    name: String,
+    rel_path: String,
+    is_dir: bool,
+    exists_local: bool,
+    exists_remote: bool,
+    size: Option<u64>,
+}
+
+/// Hariç tutma kaydetme ve isteğe bağlı yerel silme işleminin sonucu
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+struct SaveExclusionsResult {
+    excluded_count: usize,
+    deleted_local_count: usize,
+}
+
+/// rclone lsjson çıktısını parse etmek için yardımcı yapı
+#[derive(serde::Deserialize)]
+struct RcloneLsJsonItem {
+    #[serde(rename = "Name")]
+    name: String,
+    #[serde(rename = "IsDir")]
+    is_dir: bool,
+    #[serde(rename = "Size")]
+    size: Option<i64>,
+}
+
+/// Göreli yolu güvenli hale getirir ('..' gibi üst dizin geçişlerini temizler)
+fn sanitize_rel_path(rel_path: &str) -> String {
+    let parts: Vec<String> = std::path::Path::new(rel_path)
+        .components()
+        .filter_map(|c| match c {
+            std::path::Component::Normal(os_str) => os_str.to_str().map(|s| s.to_string()),
+            _ => None,
+        })
+        .collect();
+    parts.join("/")
+}
+
+/// Hariç tutulan öğelerin kaydedildiği JSON dosyasının yolunu döndürür (~/.config/cachydrive/excluded_items.json)
+fn get_exclusions_file_path() -> Result<std::path::PathBuf, String> {
+    let home = std::env::var("HOME").map_err(|_| "HOME dizini bulunamadı.".to_string())?;
+    let config_dir = std::path::Path::new(&home).join(".config/cachydrive");
+    std::fs::create_dir_all(&config_dir)
+        .map_err(|e| format!("Yapılandırma dizini oluşturulamadı: {}", e))?;
+    Ok(config_dir.join("excluded_items.json"))
+}
+
+/// Kayıtlı hariç tutma listesini diskten okur
+fn load_excluded_items_from_disk() -> Vec<ExcludedItem> {
+    let path = match get_exclusions_file_path() {
+        Ok(p) => p,
+        Err(_) => return Vec::new(),
+    };
+    let content = match std::fs::read_to_string(path) {
+        Ok(c) => c,
+        Err(_) => return Vec::new(),
+    };
+    let parsed: Vec<ExcludedItem> = serde_json::from_str(&content).unwrap_or_default();
+    parsed
+        .into_iter()
+        .filter_map(|item| {
+            let clean = sanitize_rel_path(&item.path);
+            if clean.is_empty() {
+                None
+            } else {
+                Some(ExcludedItem {
+                    path: clean,
+                    is_dir: item.is_dir,
+                })
+            }
+        })
+        .collect()
+}
+
+/// Hariç tutma listesini diske kaydeder
+fn save_excluded_items_to_disk(items: &[ExcludedItem]) -> Result<(), String> {
+    let path = get_exclusions_file_path()?;
+    let json = serde_json::to_string_pretty(items)
+        .map_err(|e| format!("JSON dönüştürme hatası: {}", e))?;
+    std::fs::write(path, json).map_err(|e| format!("Filtre dosyası yazılamadı: {}", e))
+}
+
+/// rclone glob filtrelerinde özel anlam taşıyan karakterleri kaçış (escape) karakteriyle korur
+fn escape_rclone_glob(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 8);
+    for c in s.chars() {
+        if matches!(c, '\\' | '*' | '?' | '[' | ']' | '{' | '}') {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out
+}
+
+/// Hariç tutulan yolları ~/.cache/rclone/bisync/*.lst önbellek dosyalarından temizler.
+/// Böylece çok sayıda dosya devre dışı bırakıldığında --max-delete hatası oluşmaz ve
+/// yerelden silinen bir klasör tekrar etkinleştirildiğinde buluttan güvenle geri indirilir.
+fn prune_excluded_from_bisync_listings(items: &[ExcludedItem]) {
+    if items.is_empty() {
+        return;
+    }
+    let home = match std::env::var_os("HOME") {
+        Some(h) => h,
+        None => return,
+    };
+    let bisync_dir = std::path::Path::new(&home).join(".cache/rclone/bisync");
+    let entries = match std::fs::read_dir(&bisync_dir) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let is_lst = path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .map(|ext| ext == "lst" || ext == "lst-new")
+            .unwrap_or(false);
+        if !is_lst {
+            continue;
+        }
+
+        if let Ok(content) = std::fs::read_to_string(&path) {
+            let mut modified = false;
+            let mut kept_lines = Vec::new();
+
+            for line in content.lines() {
+                if line.starts_with('#') || line.trim().is_empty() {
+                    kept_lines.push(line);
+                    continue;
+                }
+
+                let mut should_remove = false;
+                if let (Some(start), Some(end)) = (line.find('"'), line.rfind('"')) {
+                    if start < end {
+                        let entry_path = &line[start + 1..end];
+                        for ex in items {
+                            if entry_path == ex.path
+                                || entry_path.starts_with(&format!("{}/", ex.path))
+                            {
+                                should_remove = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                if should_remove {
+                    modified = true;
+                } else {
+                    kept_lines.push(line);
+                }
+            }
+
+            if modified {
+                let mut new_content = kept_lines.join("\n");
+                new_content.push('\n');
+                let _ = std::fs::write(&path, new_content);
+            }
+        }
+    }
+}
+
 /// rclone --progress çıktısındaki ANSI escape kodlarını temizler
 fn strip_ansi(s: &str) -> String {
     let mut result = String::with_capacity(s.len());
@@ -147,6 +320,10 @@ fn run_rclone_sync(
     // Yerel dizinin mevcut olduğundan emin ol
     let _ = std::fs::create_dir_all(&local_drive);
 
+    // Hariç tutulan öğeleri yükle ve bisync önbelleğini temiz tut
+    let excluded_items = load_excluded_items_from_disk();
+    prune_excluded_from_bisync_listings(&excluded_items);
+
     // Arayüzdeki çakışma kuralını rclone bisync parametresine dönüştür
     // Path1 = ~/GoogleDrive (local), Path2 = gdrive: (remote)
     let conflict_arg = match conflict_rule.as_deref() {
@@ -155,30 +332,43 @@ fn run_rclone_sync(
         _ => "newer",
     };
 
+    let mut args: Vec<String> = vec![
+        "bisync".to_string(),
+        local_drive,
+        "gdrive:".to_string(),
+        "--recover".to_string(),
+        "--conflict-resolve".to_string(),
+        conflict_arg.to_string(),
+        "--verbose".to_string(),
+        "--progress".to_string(),
+        "--fast-list".to_string(),
+        "--drive-skip-gdocs".to_string(),
+        "--drive-fast-list-bug-fix=false".to_string(),
+        "--checkers".to_string(),
+        "64".to_string(),
+        "--drive-pacer-min-sleep".to_string(),
+        "10ms".to_string(),
+        "--drive-pacer-burst".to_string(),
+        "1000".to_string(),
+        "--check-sync=false".to_string(),
+        "--transfers".to_string(),
+        "8".to_string(),
+        "--create-empty-src-dirs".to_string(),
+    ];
+
+    for item in &excluded_items {
+        let escaped = escape_rclone_glob(&item.path);
+        let pattern = if item.is_dir {
+            format!("/{}/**", escaped)
+        } else {
+            format!("/{}", escaped)
+        };
+        args.push("--exclude".to_string());
+        args.push(pattern);
+    }
+
     let mut child = Command::new("rclone")
-        .args([
-            "bisync",
-            &local_drive,
-            "gdrive:",
-            "--recover",
-            "--conflict-resolve",
-            conflict_arg,
-            "--verbose",
-            "--progress",
-            "--fast-list",
-            "--drive-skip-gdocs",
-            "--drive-fast-list-bug-fix=false",
-            "--checkers",
-            "64",
-            "--drive-pacer-min-sleep",
-            "10ms",
-            "--drive-pacer-burst",
-            "1000",
-            "--check-sync=false",
-            "--transfers",
-            "8",
-            "--create-empty-src-dirs",
-        ])
+        .args(&args)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
@@ -310,6 +500,243 @@ fn open_in_folder(rel_path: String) -> Result<(), String> {
     Ok(())
 }
 
+// 5. Görsel Klasör Ağacı İçin Dizin İçeriğini Listeleme Komutu (Yerel + Bulut Hibrit)
+#[tauri::command]
+async fn list_directory_items(
+    rel_path: String,
+    include_remote: bool,
+) -> Result<Vec<TreeItem>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let home = std::env::var("HOME").map_err(|_| "HOME dizini bulunamadı.".to_string())?;
+        let base_dir = std::path::PathBuf::from(&home).join("GoogleDrive");
+        let _ = std::fs::create_dir_all(&base_dir);
+
+        let clean_rel = sanitize_rel_path(&rel_path);
+        let target_local = if clean_rel.is_empty() {
+            base_dir.clone()
+        } else {
+            base_dir.join(&clean_rel)
+        };
+
+        let mut items_map: std::collections::BTreeMap<String, TreeItem> =
+            std::collections::BTreeMap::new();
+
+        // Adım 1: Yerel diskten anında okuma
+        if target_local.is_dir() {
+            if let Ok(entries) = std::fs::read_dir(&target_local) {
+                for entry in entries.flatten() {
+                    let file_name = entry.file_name().to_string_lossy().to_string();
+                    if file_name.starts_with(".rclone") || file_name.ends_with(".partial") {
+                        continue;
+                    }
+                    if let Ok(meta) = entry.metadata() {
+                        let is_dir = meta.is_dir();
+                        let size = if is_dir { None } else { Some(meta.len()) };
+                        let item_rel = if clean_rel.is_empty() {
+                            file_name.clone()
+                        } else {
+                            format!("{}/{}", clean_rel, file_name)
+                        };
+                        items_map.insert(
+                            file_name.clone(),
+                            TreeItem {
+                                name: file_name,
+                                rel_path: item_rel,
+                                is_dir,
+                                exists_local: true,
+                                exists_remote: false,
+                                size,
+                            },
+                        );
+                    }
+                }
+            }
+        }
+
+        // Adım 2: Daha önce hariç tutulup yerelden silinmiş öğeleri kayıtlı listeden ağaca ekle
+        let excluded = load_excluded_items_from_disk();
+        for ex in excluded {
+            let remainder = if clean_rel.is_empty() {
+                Some(ex.path.as_str())
+            } else {
+                let prefix = format!("{}/", clean_rel);
+                ex.path.strip_prefix(&prefix)
+            };
+
+            if let Some(rem) = remainder {
+                if !rem.is_empty() {
+                    let (child_name, child_is_dir) = match rem.find('/') {
+                        Some(idx) => (&rem[..idx], true),
+                        None => (rem, ex.is_dir),
+                    };
+                    let item_rel = if clean_rel.is_empty() {
+                        child_name.to_string()
+                    } else {
+                        format!("{}/{}", clean_rel, child_name)
+                    };
+                    items_map
+                        .entry(child_name.to_string())
+                        .and_modify(|e| {
+                            e.exists_remote = true;
+                        })
+                        .or_insert(TreeItem {
+                            name: child_name.to_string(),
+                            rel_path: item_rel,
+                            is_dir: child_is_dir,
+                            exists_local: false,
+                            exists_remote: true,
+                            size: None,
+                        });
+                }
+            }
+        }
+
+        // Adım 3: İstenirse Google Drive (gdrive:) üzerinden bulut içeriğini sorgula ve birleştir
+        if include_remote {
+            let remote_target = if clean_rel.is_empty() {
+                "gdrive:".to_string()
+            } else {
+                format!("gdrive:{}", clean_rel)
+            };
+
+            let output = Command::new("rclone")
+                .args([
+                    "lsjson",
+                    &remote_target,
+                    "--drive-skip-gdocs",
+                    "--no-modtime",
+                    "--no-mimetype",
+                ])
+                .output();
+
+            if let Ok(out) = output {
+                if out.status.success() {
+                    if let Ok(remote_list) =
+                        serde_json::from_slice::<Vec<RcloneLsJsonItem>>(&out.stdout)
+                    {
+                        for r_item in remote_list {
+                            let item_rel = if clean_rel.is_empty() {
+                                r_item.name.clone()
+                            } else {
+                                format!("{}/{}", clean_rel, r_item.name)
+                            };
+                            let r_size = match (r_item.is_dir, r_item.size) {
+                                (false, Some(s)) if s >= 0 => Some(s as u64),
+                                _ => None,
+                            };
+
+                            items_map
+                                .entry(r_item.name.clone())
+                                .and_modify(|existing| {
+                                    existing.exists_remote = true;
+                                    if existing.size.is_none() {
+                                        existing.size = r_size;
+                                    }
+                                })
+                                .or_insert(TreeItem {
+                                    name: r_item.name,
+                                    rel_path: item_rel,
+                                    is_dir: r_item.is_dir,
+                                    exists_local: false,
+                                    exists_remote: true,
+                                    size: r_size,
+                                });
+                        }
+                    }
+                }
+            }
+        }
+
+        let mut result: Vec<TreeItem> = items_map.into_values().collect();
+        result.sort_by(|a, b| match (a.is_dir, b.is_dir) {
+            (true, false) => std::cmp::Ordering::Less,
+            (false, true) => std::cmp::Ordering::Greater,
+            _ => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
+        });
+
+        Ok(result)
+    })
+    .await
+    .map_err(|e| format!("Listeleme görevi hatası: {}", e))?
+}
+
+// 6. Hariç Tutulan Öğeleri Getirme Komutu
+#[tauri::command]
+fn get_excluded_items() -> Result<Vec<ExcludedItem>, String> {
+    Ok(load_excluded_items_from_disk())
+}
+
+// 7. Hariç Tutulan Öğeleri Kaydetme ve İsteğe Bağlı Yerelden Silme Komutu
+#[tauri::command]
+fn save_excluded_items(
+    items: Vec<ExcludedItem>,
+    delete_local_paths: Vec<String>,
+    state: tauri::State<'_, SyncState>,
+) -> Result<SaveExclusionsResult, String> {
+    if let Ok(guard) = state.0.lock() {
+        if guard.is_some() {
+            return Err(
+                "Aktif bir senkronizasyon çalışırken filtreler değiştirilemez. Lütfen önce işlemi durdurun veya bitmesini bekleyin."
+                    .to_string(),
+            );
+        }
+    }
+
+    let mut clean_items: Vec<ExcludedItem> = Vec::new();
+    for item in items {
+        let clean = sanitize_rel_path(&item.path);
+        if !clean.is_empty() && !clean_items.iter().any(|x| x.path == clean) {
+            clean_items.push(ExcludedItem {
+                path: clean,
+                is_dir: item.is_dir,
+            });
+        }
+    }
+
+    // 1. Önce filtre listesini diske kaydet ve bisync .lst önbelleğinden çıkar (Güvenlik sırası!)
+    save_excluded_items_to_disk(&clean_items)?;
+    prune_excluded_from_bisync_listings(&clean_items);
+
+    // 2. Kullanıcı "bilgisayarımdan da sil" seçeneğini işaretlediyse sadece hariç tutulan yerel öğeleri sil
+    let mut deleted_local_count = 0usize;
+    if !delete_local_paths.is_empty() {
+        let home = std::env::var("HOME").map_err(|_| "HOME dizini bulunamadı.".to_string())?;
+        let base_dir = std::path::PathBuf::from(&home).join("GoogleDrive");
+
+        for raw_path in delete_local_paths {
+            let clean = sanitize_rel_path(&raw_path);
+            if clean.is_empty() {
+                continue;
+            }
+
+            // Güvenlik kontrolü: Yalnızca gerçekten hariç tutulmuş (veya üst klasörü hariç tutulmuş) bir öğe silinebilir
+            let is_excluded = clean_items.iter().any(|ex| {
+                ex.path == clean || (ex.is_dir && clean.starts_with(&format!("{}/", ex.path)))
+            });
+            if !is_excluded {
+                continue;
+            }
+
+            let target = base_dir.join(&clean);
+            if target.starts_with(&base_dir) && target != base_dir && target.exists() {
+                let res = if target.is_dir() {
+                    std::fs::remove_dir_all(&target)
+                } else {
+                    std::fs::remove_file(&target)
+                };
+                if res.is_ok() {
+                    deleted_local_count += 1;
+                }
+            }
+        }
+    }
+
+    Ok(SaveExclusionsResult {
+        excluded_count: clean_items.len(),
+        deleted_local_count,
+    })
+}
+
 fn main() {
     let sync_pid = Arc::new(Mutex::new(None));
     let tray_sync_pid = Arc::clone(&sync_pid);
@@ -380,7 +807,10 @@ fn main() {
             run_rclone_sync,
             stop_rclone_sync,
             update_tray_lang,
-            open_in_folder
+            open_in_folder,
+            list_directory_items,
+            get_excluded_items,
+            save_excluded_items
         ])
         .run(tauri::generate_context!())
         .expect("Tauri uygulaması başlatılırken hata oluştu");

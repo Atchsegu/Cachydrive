@@ -38,6 +38,20 @@ const syncIntervalSelect = document.getElementById('sync-interval');
 const conflictRuleSelect = document.getElementById('conflict-rule');
 const autoStartSelect    = document.getElementById('auto-start');
 
+// Klasör ve Dosya Seçimi (Selective Sync) Elemanları
+const scanCloudBtn          = document.getElementById('scan-cloud-btn');
+const exclusionSummaryBadge = document.getElementById('exclusion-summary-badge');
+const treeSearchInput       = document.getElementById('tree-search-input');
+const folderTreeRoot        = document.getElementById('folder-tree-root');
+const deleteLocalCheckbox   = document.getElementById('delete-local-checkbox');
+const applyExclusionsBtn    = document.getElementById('apply-exclusions-btn');
+
+// Onay Penceresi (Modal) Elemanları
+const deleteConfirmModal = document.getElementById('delete-confirm-modal');
+const modalDeleteList    = document.getElementById('modal-delete-list');
+const modalCancelBtn     = document.getElementById('modal-cancel-btn');
+const modalConfirmBtn    = document.getElementById('modal-confirm-btn');
+
 // --- LİMİTLER ---
 const MAX_DASHBOARD_LOGS = 50;
 const MAX_HISTORY_LOGS = 200;
@@ -73,6 +87,13 @@ let isSyncing = false;
 let hasTransferStats = false;
 let syncIntervalId = null;
 
+// Seçmeli Senkronizasyon (Selective Sync) Durumu
+// Anahtar: göreli yol (relPath), Değer: is_dir (boolean)
+const excludedMap = new Map();
+const knownItemsMap = new Map();
+let treeInitialized = false;
+let isScanningCloud = false;
+
 // --- DİLİ TÜM UYGULAMAYA UYGULAMA ---
 function applyLanguage(lang) {
   currentLang = lang;
@@ -83,10 +104,17 @@ function applyLanguage(lang) {
   // HTML'deki tüm data-i18n etiketli elemanları güncelle
   document.querySelectorAll('[data-i18n]').forEach((el) => {
     const key = el.getAttribute('data-i18n');
-    if (translations[lang] && translations[lang][key]) {
+    if (translations[lang] && typeof translations[lang][key] === 'string') {
       el.textContent = translations[lang][key];
     }
   });
+
+  if (treeSearchInput) {
+    treeSearchInput.placeholder = t('tree_search_placeholder');
+  }
+  if (scanCloudBtn) {
+    scanCloudBtn.textContent = isScanningCloud ? t('btn_scanning_cloud') : t('btn_scan_cloud');
+  }
 
   // Sistem tepsisi (tray menu) dilini Rust backend'e bildir
   invoke('update_tray_lang', { lang }).catch(() => {});
@@ -116,6 +144,9 @@ function applyLanguage(lang) {
   if (_scanDashBadge) {
     _scanDashBadge.textContent = t('log_badge_scanning');
   }
+
+  updateExclusionSummary();
+  refreshTreeExclusionStates();
 }
 
 // --- YARDIMCI FONKSİYONLAR ---
@@ -635,10 +666,429 @@ stopBtn.addEventListener('click', async () => {
   }
 });
 
+// --- SEÇMELİ SENKRONİZASYON (GÖRSEL KLASÖR AĞACI) ---
+function formatBytes(bytes) {
+  if (bytes === null || bytes === undefined) return '';
+  if (bytes === 0) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  const idx = Math.min(units.length - 1, Math.floor(Math.log(bytes) / Math.log(1024)));
+  const val = bytes / Math.pow(1024, idx);
+  return `${val < 10 && idx > 0 ? val.toFixed(1) : Math.round(val)} ${units[idx]}`;
+}
+
+function isParentExcluded(relPath) {
+  const parts = relPath.split('/');
+  for (let i = 1; i < parts.length; i++) {
+    const ancestor = parts.slice(0, i).join('/');
+    if (excludedMap.get(ancestor) === true) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function isItemExcluded(relPath) {
+  return excludedMap.has(relPath) || isParentExcluded(relPath);
+}
+
+function updateExclusionSummary() {
+  if (!exclusionSummaryBadge) return;
+  const count = excludedMap.size;
+  const helpers = translations[currentLang] || translations['en'];
+  if (count === 0) {
+    exclusionSummaryBadge.textContent = t('summary_all_synced');
+    exclusionSummaryBadge.classList.remove('has-exclusions');
+  } else {
+    exclusionSummaryBadge.textContent = helpers.summary_excluded_count(count);
+    exclusionSummaryBadge.classList.add('has-exclusions');
+  }
+}
+
+function refreshTreeExclusionStates() {
+  if (!folderTreeRoot) return;
+  folderTreeRoot.querySelectorAll('.tree-node').forEach((nodeEl) => {
+    const relPath = nodeEl.dataset.relPath;
+    if (!relPath) return;
+
+    const rowEl      = nodeEl.querySelector(':scope > .tree-row');
+    const checkboxEl = rowEl ? rowEl.querySelector('.tree-checkbox') : null;
+    const statusPill = rowEl ? rowEl.querySelector('.pill-status') : null;
+    const locPill    = rowEl ? rowEl.querySelector('.pill-location') : null;
+
+    const parentEx = isParentExcluded(relPath);
+    const directEx = excludedMap.has(relPath);
+    const excluded = parentEx || directEx;
+
+    if (rowEl) {
+      rowEl.classList.toggle('is-excluded', excluded);
+    }
+    if (checkboxEl) {
+      checkboxEl.checked  = !excluded;
+      checkboxEl.disabled = parentEx;
+    }
+    if (statusPill) {
+      if (parentEx) {
+        statusPill.hidden = false;
+        statusPill.textContent = t('badge_parent_excluded');
+      } else if (directEx) {
+        statusPill.hidden = false;
+        statusPill.textContent = t('badge_excluded');
+      } else {
+        statusPill.hidden = true;
+      }
+    }
+    if (locPill) {
+      const info = knownItemsMap.get(relPath);
+      if (info) {
+        if (info.exists_local && info.exists_remote) {
+          locPill.textContent = t('badge_synced');
+          locPill.className = 'tree-pill pill-location pill-local';
+        } else if (info.exists_local) {
+          locPill.textContent = t('badge_local_only');
+          locPill.className = 'tree-pill pill-location pill-local';
+        } else {
+          locPill.textContent = t('badge_cloud_only');
+          locPill.className = 'tree-pill pill-location pill-cloud';
+        }
+      }
+    }
+  });
+}
+
+function createTreeNodeElement(item) {
+  knownItemsMap.set(item.rel_path, item);
+
+  const nodeEl = document.createElement('div');
+  nodeEl.className = 'tree-node';
+  nodeEl.dataset.relPath = item.rel_path;
+  nodeEl.dataset.isDir   = item.is_dir ? 'true' : 'false';
+  nodeEl.dataset.name    = item.name.toLowerCase();
+
+  const rowEl = document.createElement('div');
+  rowEl.className = 'tree-row';
+
+  let toggleBtn = null;
+  let childrenContainer = null;
+
+  if (item.is_dir) {
+    toggleBtn = document.createElement('button');
+    toggleBtn.type = 'button';
+    toggleBtn.className = 'tree-toggle-btn';
+    toggleBtn.textContent = '▸';
+    toggleBtn.setAttribute('aria-expanded', 'false');
+    rowEl.appendChild(toggleBtn);
+  } else {
+    const placeholder = document.createElement('span');
+    placeholder.className = 'tree-toggle-placeholder';
+    rowEl.appendChild(placeholder);
+  }
+
+  const checkbox = document.createElement('input');
+  checkbox.type = 'checkbox';
+  checkbox.className = 'tree-checkbox';
+  const parentEx = isParentExcluded(item.rel_path);
+  const directEx = excludedMap.has(item.rel_path);
+  checkbox.checked  = !(parentEx || directEx);
+  checkbox.disabled = parentEx;
+
+  checkbox.addEventListener('change', () => {
+    if (checkbox.checked) {
+      excludedMap.delete(item.rel_path);
+    } else {
+      excludedMap.set(item.rel_path, item.is_dir);
+      if (item.is_dir) {
+        const prefix = `${item.rel_path}/`;
+        for (const key of Array.from(excludedMap.keys())) {
+          if (key.startsWith(prefix)) {
+            excludedMap.delete(key);
+          }
+        }
+      }
+    }
+    updateExclusionSummary();
+    refreshTreeExclusionStates();
+  });
+  rowEl.appendChild(checkbox);
+
+  const iconSpan = document.createElement('span');
+  iconSpan.className = 'tree-icon';
+  iconSpan.textContent = item.is_dir ? '📁' : '📄';
+  rowEl.appendChild(iconSpan);
+
+  const nameSpan = document.createElement('span');
+  nameSpan.className = 'tree-item-name';
+  nameSpan.textContent = item.name;
+  nameSpan.title = `~/GoogleDrive/${item.rel_path}`;
+  rowEl.appendChild(nameSpan);
+
+  if (!item.is_dir && item.size !== null && item.size !== undefined) {
+    const sizeSpan = document.createElement('span');
+    sizeSpan.className = 'tree-item-size';
+    sizeSpan.textContent = formatBytes(item.size);
+    rowEl.appendChild(sizeSpan);
+  }
+
+  const statusPill = document.createElement('span');
+  statusPill.className = 'tree-pill pill-status pill-excluded';
+  statusPill.hidden = true;
+  rowEl.appendChild(statusPill);
+
+  const locPill = document.createElement('span');
+  locPill.className = 'tree-pill pill-location';
+  rowEl.appendChild(locPill);
+
+  nodeEl.appendChild(rowEl);
+
+  if (item.is_dir) {
+    childrenContainer = document.createElement('div');
+    childrenContainer.className = 'tree-children';
+    childrenContainer.hidden = true;
+    nodeEl.appendChild(childrenContainer);
+
+    const handleToggle = async () => {
+      const isExpanded = toggleBtn.getAttribute('aria-expanded') === 'true';
+      if (isExpanded) {
+        toggleBtn.setAttribute('aria-expanded', 'false');
+        toggleBtn.textContent = '▸';
+        childrenContainer.hidden = true;
+      } else {
+        toggleBtn.setAttribute('aria-expanded', 'true');
+        toggleBtn.textContent = '▾';
+        childrenContainer.hidden = false;
+        if (!childrenContainer.dataset.loaded) {
+          // Klasör yerelde yoksa buluttan getir, yerelde varsa hızlıca yerelden yükle
+          await loadDirectoryIntoContainer(item.rel_path, childrenContainer, !item.exists_local);
+        }
+      }
+    };
+
+    toggleBtn.addEventListener('click', handleToggle);
+    nameSpan.addEventListener('click', handleToggle);
+  } else {
+    nameSpan.addEventListener('click', () => {
+      if (!checkbox.disabled) {
+        checkbox.checked = !checkbox.checked;
+        checkbox.dispatchEvent(new Event('change'));
+      }
+    });
+  }
+
+  return nodeEl;
+}
+
+async function loadDirectoryIntoContainer(relPath, containerEl, includeRemote = false) {
+  if (!containerEl) return;
+  containerEl.innerHTML = `<div class="tree-loading-msg">${t('tree_loading')}</div>`;
+
+  try {
+    const items = await invoke('list_directory_items', { relPath, includeRemote });
+    containerEl.innerHTML = '';
+    containerEl.dataset.loaded = 'true';
+
+    if (!items || items.length === 0) {
+      if (relPath === '' && !includeRemote) {
+        // Yerel ~/GoogleDrive henüz boşsa otomatik olarak bulutu tara
+        await loadDirectoryIntoContainer('', containerEl, true);
+        return;
+      }
+      const emptyEl = document.createElement('div');
+      emptyEl.className = 'tree-empty-msg';
+      emptyEl.textContent = t('tree_empty');
+      containerEl.appendChild(emptyEl);
+      return;
+    }
+
+    const frag = document.createDocumentFragment();
+    for (const item of items) {
+      frag.appendChild(createTreeNodeElement(item));
+    }
+    containerEl.appendChild(frag);
+    refreshTreeExclusionStates();
+    applyTreeSearchFilter();
+  } catch (err) {
+    containerEl.innerHTML = '';
+    const errEl = document.createElement('div');
+    errEl.className = 'tree-empty-msg';
+    errEl.style.color = 'var(--google-red)';
+    errEl.textContent = String(err);
+    containerEl.appendChild(errEl);
+  }
+}
+
+async function initSelectiveSyncTree(forceRemote = false) {
+  try {
+    const savedExclusions = await invoke('get_excluded_items');
+    excludedMap.clear();
+    if (Array.isArray(savedExclusions)) {
+      for (const item of savedExclusions) {
+        if (item && item.path) {
+          excludedMap.set(item.path, Boolean(item.is_dir));
+        }
+      }
+    }
+    updateExclusionSummary();
+  } catch (_) {}
+
+  treeInitialized = true;
+  await loadDirectoryIntoContainer('', folderTreeRoot, forceRemote);
+}
+
+function applyTreeSearchFilter() {
+  if (!folderTreeRoot || !treeSearchInput) return;
+  const query = treeSearchInput.value.trim().toLowerCase();
+  const allNodes = folderTreeRoot.querySelectorAll('.tree-node');
+
+  if (!query) {
+    allNodes.forEach((n) => {
+      n.style.display = '';
+    });
+    return;
+  }
+
+  // Alt düğümlerden üst düğümlere doğru kontrol et
+  const nodesArray = Array.from(allNodes).reverse();
+  for (const nodeEl of nodesArray) {
+    const name = nodeEl.dataset.name || '';
+    const relPath = (nodeEl.dataset.relPath || '').toLowerCase();
+    const selfMatch = name.includes(query) || relPath.includes(query);
+    const childContainer = nodeEl.querySelector(':scope > .tree-children');
+    const hasVisibleChild = childContainer
+      ? Array.from(childContainer.children).some(
+          (c) => c.classList.contains('tree-node') && c.style.display !== 'none'
+        )
+      : false;
+
+    nodeEl.style.display = selfMatch || hasVisibleChild ? '' : 'none';
+  }
+}
+
+if (treeSearchInput) {
+  treeSearchInput.addEventListener('input', applyTreeSearchFilter);
+}
+
+if (scanCloudBtn) {
+  scanCloudBtn.addEventListener('click', async () => {
+    if (isScanningCloud) return;
+    isScanningCloud = true;
+    scanCloudBtn.disabled = true;
+    scanCloudBtn.textContent = t('btn_scanning_cloud');
+
+    try {
+      await loadDirectoryIntoContainer('', folderTreeRoot, true);
+    } finally {
+      isScanningCloud = false;
+      scanCloudBtn.disabled = false;
+      scanCloudBtn.textContent = t('btn_scan_cloud');
+    }
+  });
+}
+
+async function executeSaveExclusions(items, deleteLocalPaths) {
+  if (!applyExclusionsBtn) return;
+  applyExclusionsBtn.disabled = true;
+  applyExclusionsBtn.textContent = t('btn_applying');
+
+  try {
+    const res = await invoke('save_excluded_items', {
+      items,
+      deleteLocalPaths,
+    });
+
+    if (deleteLocalCheckbox) {
+      deleteLocalCheckbox.checked = false;
+    }
+
+    const helpers = translations[currentLang] || translations['en'];
+    if (res && res.deleted_local_count > 0) {
+      addLog(
+        helpers.msg_exclusions_saved_and_deleted(res.excluded_count, res.deleted_local_count),
+        'system'
+      );
+    } else {
+      addLog(
+        helpers.msg_exclusions_saved(res ? res.excluded_count : items.length),
+        'system'
+      );
+    }
+
+    // Yerelden silinen öğelerin durum rozetlerini ("Sadece Bulutta") güncellemek için ağacı tazele
+    await loadDirectoryIntoContainer('', folderTreeRoot, false);
+
+    applyExclusionsBtn.textContent = t('btn_saved');
+    applyExclusionsBtn.style.backgroundColor = 'var(--google-green)';
+    setTimeout(() => {
+      applyExclusionsBtn.textContent = t('btn_apply_exclusions');
+      applyExclusionsBtn.style.backgroundColor = 'var(--noble-purple)';
+      applyExclusionsBtn.disabled = false;
+    }, 1800);
+  } catch (err) {
+    addLog(t('msg_warning') + err, 'error');
+    applyExclusionsBtn.textContent = t('btn_apply_exclusions');
+    applyExclusionsBtn.style.backgroundColor = 'var(--noble-purple)';
+    applyExclusionsBtn.disabled = false;
+  }
+}
+
+let pendingSavePayload = null;
+
+if (applyExclusionsBtn) {
+  applyExclusionsBtn.addEventListener('click', async () => {
+    const items = Array.from(excludedMap.entries()).map(([path, is_dir]) => ({
+      path,
+      is_dir,
+    }));
+
+    const wantsLocalDelete = deleteLocalCheckbox && deleteLocalCheckbox.checked;
+    if (wantsLocalDelete && items.length > 0) {
+      // Yerel diskte var olan (veya bilinmeyen) devre dışı bırakılmış öğeleri filtrele
+      const localCandidates = items.filter((item) => {
+        const info = knownItemsMap.get(item.path);
+        return !info || info.exists_local;
+      });
+
+      if (localCandidates.length > 0 && deleteConfirmModal && modalDeleteList) {
+        modalDeleteList.innerHTML = '';
+        for (const cand of localCandidates) {
+          const li = document.createElement('li');
+          li.textContent = `${cand.is_dir ? '📁' : '📄'} ~/GoogleDrive/${cand.path}${cand.is_dir ? '/' : ''}`;
+          modalDeleteList.appendChild(li);
+        }
+        pendingSavePayload = {
+          items,
+          deleteLocalPaths: localCandidates.map((c) => c.path),
+        };
+        deleteConfirmModal.hidden = false;
+        return;
+      }
+    }
+
+    await executeSaveExclusions(items, []);
+  });
+}
+
+if (modalCancelBtn) {
+  modalCancelBtn.addEventListener('click', () => {
+    pendingSavePayload = null;
+    if (deleteConfirmModal) deleteConfirmModal.hidden = true;
+  });
+}
+
+if (modalConfirmBtn) {
+  modalConfirmBtn.addEventListener('click', async () => {
+    if (deleteConfirmModal) deleteConfirmModal.hidden = true;
+    if (pendingSavePayload) {
+      const { items, deleteLocalPaths } = pendingSavePayload;
+      pendingSavePayload = null;
+      await executeSaveExclusions(items, deleteLocalPaths);
+    }
+  });
+}
+
 // --- MENÜ GEÇİŞ SİSTEMİ ---
 const navBtns = document.querySelectorAll('.nav-btn');
 const pages = [
   document.getElementById('view-dashboard'),
+  document.getElementById('view-selective'),
   document.getElementById('view-history'),
   document.getElementById('view-settings'),
 ];
@@ -646,9 +1096,16 @@ const pages = [
 navBtns.forEach((btn, index) => {
   btn.addEventListener('click', () => {
     navBtns.forEach(b => b.classList.remove('active'));
-    pages.forEach(page => (page.style.display = 'none'));
+    pages.forEach(page => {
+      if (page) page.style.display = 'none';
+    });
     btn.classList.add('active');
-    pages[index].style.display = 'block';
+    if (pages[index]) pages[index].style.display = 'block';
+
+    // Klasör Seçimi sekmesine ilk geçişte ağacı anında yükle
+    if (pages[index] && pages[index].id === 'view-selective' && !treeInitialized) {
+      initSelectiveSyncTree(false);
+    }
   });
 });
 

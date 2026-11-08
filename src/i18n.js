@@ -2,6 +2,7 @@ export const translations = {
   tr: {
     // Nav
     nav_dashboard: "Ana Pano",
+    nav_selective_sync: "Klasör Seçimi",
     nav_history: "İşlem Geçmişi",
     nav_settings: "Ayarlar",
 
@@ -35,6 +36,31 @@ export const translations = {
     recent_activity_title: "Son Etkileşimler",
     log_system: "Sistem",
     log_ui_started: "Arayüz başlatıldı.",
+
+    // Selective Sync (Visual Folder Tree)
+    selective_title: "Klasör ve Dosya Seçimi",
+    btn_scan_cloud: "☁ Bulutu Tara",
+    btn_scanning_cloud: "☁ Bulut Taranıyor...",
+    selective_desc: "Senkronizasyona dahil etmek istediğiniz klasör ve dosyaları işaretleyin. İşareti kaldırılan öğeler eşitlenmez.",
+    tree_search_placeholder: "Klasör veya dosya filtrele...",
+    tree_empty: "Henüz görüntülenecek klasör veya dosya yok. 'Bulutu Tara' butonuna tıklayarak Google Drive içeriğinizi yükleyebilirsiniz.",
+    tree_loading: "Klasör içeriği yükleniyor...",
+    badge_local_only: "Yerel",
+    badge_cloud_only: "Sadece Bulutta",
+    badge_synced: "Yerel + Bulut",
+    badge_excluded: "Devre Dışı",
+    badge_parent_excluded: "Üst Klasör Devre Dışı",
+    opt_delete_local_excluded: "Seçimi kaldırılan (devre dışı) öğeleri bilgisayarımdan da sil (Bulutta korunur, diskte yer açar)",
+    btn_apply_exclusions: "Değişiklikleri Uygula",
+    btn_applying: "Uygulanıyor...",
+    modal_delete_title: "Yerel Kopyaları Silme Onayı",
+    modal_delete_desc: "Aşağıdaki devre dışı bırakılan öğeler bilgisayarınızdaki ~/GoogleDrive klasöründen silinecek (Google Drive bulut hesabınızda güvende kalmaya devam edecek):",
+    modal_btn_cancel: "Vazgeç",
+    modal_btn_confirm_delete: "Evet, Yerelden Sil ve Kaydet",
+    summary_all_synced: "Tüm öğeler senkronize ediliyor",
+    summary_excluded_count: (count) => `${count} öğe senkronizasyon dışı`,
+    msg_exclusions_saved: (count) => `Filtre ayarları kaydedildi (${count} öğe devre dışı).`,
+    msg_exclusions_saved_and_deleted: (exCount, delCount) => `Filtre ayarları kaydedildi (${exCount} öğe devre dışı, ${delCount} yerel kopya bilgisayardan kaldırıldı).`,
 
     // History
     history_title: "İşlem Geçmişi",
@@ -102,6 +128,7 @@ export const translations = {
   en: {
     // Nav
     nav_dashboard: "Dashboard",
+    nav_selective_sync: "Selective Sync",
     nav_history: "Activity History",
     nav_settings: "Settings",
 
@@ -135,6 +162,31 @@ export const translations = {
     recent_activity_title: "Recent Activity",
     log_system: "System",
     log_ui_started: "Interface initialized.",
+
+    // Selective Sync (Visual Folder Tree)
+    selective_title: "Selective Sync",
+    btn_scan_cloud: "☁ Scan Cloud",
+    btn_scanning_cloud: "☁ Scanning Cloud...",
+    selective_desc: "Check the folders and files you want to synchronize. Unchecked items will be ignored during sync.",
+    tree_search_placeholder: "Filter folders or files...",
+    tree_empty: "No folders or files found yet. Click 'Scan Cloud' to fetch your Google Drive contents.",
+    tree_loading: "Loading folder contents...",
+    badge_local_only: "Local",
+    badge_cloud_only: "Cloud Only",
+    badge_synced: "Local & Cloud",
+    badge_excluded: "Excluded",
+    badge_parent_excluded: "Parent Excluded",
+    opt_delete_local_excluded: "Also delete unchecked (excluded) items from my computer (Kept safe on Cloud, frees up disk space)",
+    btn_apply_exclusions: "Apply Changes",
+    btn_applying: "Applying...",
+    modal_delete_title: "Confirm Local Copy Deletion",
+    modal_delete_desc: "The following excluded items will be deleted from ~/GoogleDrive on your computer (they will remain safely on your Google Drive cloud):",
+    modal_btn_cancel: "Cancel",
+    modal_btn_confirm_delete: "Yes, Delete Locally & Save",
+    summary_all_synced: "All items are synchronized",
+    summary_excluded_count: (count) => `${count} item(s) excluded`,
+    msg_exclusions_saved: (count) => `Filter settings saved (${count} item(s) excluded).`,
+    msg_exclusions_saved_and_deleted: (exCount, delCount) => `Filter settings saved (${exCount} item(s) excluded, ${delCount} local copy/copies removed from computer).`,
 
     // History
     history_title: "Activity History",
