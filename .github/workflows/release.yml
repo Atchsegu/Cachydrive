@@ -29,7 +29,8 @@ jobs:
           pacman -Syu --noconfirm --needed \
             git curl wget file base-devel \
             webkit2gtk-4.1 gtk3 librsvg libayatana-appindicator \
-            xdotool openssl squashfs-tools fuse2 \
+            xdotool xdg-utils desktop-file-utils patchelf dbus \
+            openssl squashfs-tools fuse2 \
             nodejs npm rust github-cli \
             xorg-server-xvfb imagemagick python
 
@@ -47,7 +48,7 @@ jobs:
           echo "Testing AppImage: $APPIMAGE_PATH"
           chmod +x "$APPIMAGE_PATH"
 
-          xvfb-run -a -s "-screen 0 1024x768x24" bash -c "
+          dbus-run-session -- xvfb-run -a -s "-screen 0 1024x768x24" bash -c "
             \"$APPIMAGE_PATH\" > /tmp/cachydrive_run.log 2>&1 &
             APP_PID=\$!
             sleep 6

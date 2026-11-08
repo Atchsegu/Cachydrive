@@ -759,10 +759,15 @@ fn main() {
 
             let menu = Menu::with_items(app, &[&show_i, &hide_i, &quit_i])?;
 
-            let _tray = TrayIconBuilder::with_id("main-tray")
+            let mut tray_builder = TrayIconBuilder::with_id("main-tray")
                 .menu(&menu)
-                .show_menu_on_left_click(false)
-                .icon(app.default_window_icon().unwrap().clone())
+                .show_menu_on_left_click(false);
+
+            if let Some(icon) = app.default_window_icon() {
+                tray_builder = tray_builder.icon(icon.clone());
+            }
+
+            if let Err(e) = tray_builder
                 .on_menu_event(move |app, event| match event.id.as_ref() {
                     "show" => {
                         if let Some(window) = app.get_webview_window("main") {
@@ -797,7 +802,10 @@ fn main() {
                         }
                     }
                 })
-                .build(app)?;
+                .build(app)
+            {
+                eprintln!("Tray icon initialization warning: {}", e);
+            }
 
             Ok(())
         })
