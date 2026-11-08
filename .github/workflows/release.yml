@@ -22,25 +22,44 @@ jobs:
       APPIMAGE_EXTRACT_AND_RUN: 1
       NO_STRIP: true
       WEBKIT_DISABLE_DMABUF_RENDERER: 1
-      WEBKIT_DISABLE_COMPOSITING_MODE: 1
     steps:
       - name: Install Arch Linux dependencies
         run: |
           pacman -Syu --noconfirm --needed \
             git curl wget file base-devel \
             webkit2gtk-4.1 gtk3 librsvg libayatana-appindicator \
+            gobject-introspection gdk-pixbuf2 glib2 \
             xdotool xdg-utils desktop-file-utils patchelf dbus \
             openssl squashfs-tools fuse2 \
             nodejs npm rust github-cli \
-            xorg-server-xvfb imagemagick python
+            xorg-server-xvfb imagemagick mesa
 
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Prepare updated Tauri linuxdeploy tools for Arch Linux (PR #16062)
+        run: |
+          mkdir -p /root/.cache/tauri
+          curl -fL "https://github.com/tauri-apps/binary-releases/releases/download/linuxdeploy-07333c6/linuxdeploy-x86_64.AppImage" \
+            -o /root/.cache/tauri/linuxdeploy-x86_64.AppImage
+          chmod +x /root/.cache/tauri/linuxdeploy-x86_64.AppImage
+
+          curl -fL "https://raw.githubusercontent.com/tauri-apps/tauri/8e70283/crates/tauri-bundler/src/bundle/linux/appimage/linuxdeploy-plugin-gtk.sh" \
+            -o /root/.cache/tauri/linuxdeploy-plugin-gtk.sh
+          # Guard PATCH_ARRAY directories in case gdk_pixbuf_moduledir does not exist on Arch (gdk-pixbuf 2.44+)
+          sed -i 's/done < <(find "\$directory"/done < <([ -d "\$directory" ] \&\& find "\$directory"/' /root/.cache/tauri/linuxdeploy-plugin-gtk.sh
+          # Export WEBKIT_DISABLE_DMABUF_RENDERER=1 in AppRun GTK hook
+          cat >> /root/.cache/tauri/linuxdeploy-plugin-gtk.sh << 'EOF'
+          cat >> "$HOOKFILE" << 'HOOK_EOF'
+          export WEBKIT_DISABLE_DMABUF_RENDERER="${WEBKIT_DISABLE_DMABUF_RENDERER:-1}"
+          HOOK_EOF
+          EOF
+          chmod +x /root/.cache/tauri/linuxdeploy-plugin-gtk.sh
+
       - name: Install frontend dependencies and build AppImage
         run: |
           npm install
-          npx tauri build --bundles appimage
+          npx tauri build --bundles appimage --verbose
 
       - name: Verify AppImage launches and renders UI (No Blank Grey Screen)
         run: |
@@ -48,21 +67,22 @@ jobs:
           echo "Testing AppImage: $APPIMAGE_PATH"
           chmod +x "$APPIMAGE_PATH"
 
-          dbus-run-session -- xvfb-run -a -s "-screen 0 1024x768x24" bash -c "
-            \"$APPIMAGE_PATH\" > /tmp/cachydrive_run.log 2>&1 &
-            APP_PID=\$!
-            sleep 6
-            if ! kill -0 \$APP_PID 2>/dev/null; then
-              echo 'ERROR: CachyDrive process exited prematurely!'
-              cat /tmp/cachydrive_run.log
-              exit 1
-            fi
-            magick import -window root /tmp/ui_screenshot.png
-            kill \$APP_PID 2>/dev/null || true
-          "
+          LIBGL_ALWAYS_SOFTWARE=1 WEBKIT_DISABLE_COMPOSITING_MODE=1 WEBKIT_DISABLE_DMABUF_RENDERER=1 \
+            dbus-run-session -- xvfb-run -a -s "-screen 0 1024x768x24" bash -c "
+              \"$APPIMAGE_PATH\" > /tmp/cachydrive_run.log 2>&1 &
+              APP_PID=\$!
+              sleep 7
+              if ! kill -0 \$APP_PID 2>/dev/null; then
+                echo 'ERROR: CachyDrive process exited prematurely!'
+                cat /tmp/cachydrive_run.log
+                exit 1
+              fi
+              magick import -window root /tmp/ui_screenshot.png
+              kill \$APP_PID 2>/dev/null || true
+            "
 
           cat /tmp/cachydrive_run.log || true
-          magick identify -verbose /tmp/ui_screenshot.png | head -n 40
+          magick identify /tmp/ui_screenshot.png
 
           # Check that the screenshot contains multiple distinct UI colors (white card, purple logo/buttons, blue/red buttons)
           COLORS=$(magick /tmp/ui_screenshot.png -format "%k" info:)
