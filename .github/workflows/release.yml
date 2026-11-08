@@ -105,9 +105,10 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE" || true
           TAG="${{ github.event.inputs.tag || github.event.release.tag_name || 'v0.2.0' }}"
-          if ! gh release view "$TAG" >/dev/null 2>&1; then
-            gh release create "$TAG" \
+          if ! gh release view "$TAG" -R "${{ github.repository }}" >/dev/null 2>&1; then
+            gh release create "$TAG" -R "${{ github.repository }}" \
               --target main \
               --title "CachyDrive $TAG - Selective Sync & Local Space Saver" \
               --notes "### ✨ What's New in $TAG
@@ -116,4 +117,4 @@ jobs:
           - **Optional Local Space Saver:** Optionally delete unchecked/excluded folders and files from your local \`~/GoogleDrive\` directory (with confirmation dialog) to free up disk space while keeping them 100% safe on Google Drive.
           - **Linux / CachyOS WebKitGTK Rendering Fix:** Built natively on Arch Linux with \`WEBKIT_DISABLE_DMABUF_RENDERER=1\` to prevent DMA-BUF blank grey screen issues on Wayland/CachyOS."
           fi
-          gh release upload "$TAG" src-tauri/target/release/bundle/appimage/*.AppImage --clobber
+          gh release upload "$TAG" -R "${{ github.repository }}" src-tauri/target/release/bundle/appimage/*.AppImage --clobber
