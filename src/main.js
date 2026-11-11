@@ -452,13 +452,23 @@ listen('rclone-log', (event) => {
     const cleanLine = line.replace(/^Transferred:\s+/, '').trim();
     const parts = cleanLine.split(',');
     if (parts.length >= 4) {
-      hasTransferStats = true;
-      document.getElementById('stat-size').textContent    = parts[0].trim();
-      const pctVal = parseFloat(parts[1]);
-      document.getElementById('stat-percent').textContent = !isNaN(pctVal) ? formatPercent(pctVal) : parts[1].trim();
-      document.getElementById('stat-speed').textContent   = parts[2].trim();
-      document.getElementById('stat-eta').textContent     = parts[3].replace('ETA', '').trim();
-      if (!isNaN(pctVal)) progressBar.style.width = pctVal + '%';
+      const sizeStr  = parts[0].trim();
+      const pctRaw   = parts[1].trim();
+      const speedStr = parts[2].trim();
+      const etaStr   = parts[3].replace('ETA', '').trim();
+
+      // Tarama aşamasında henüz dosya aktarımı başlamamışken rclone "0 B / 0 B, -, 0 B/s, ETA -"
+      // gönderir; bu boş satırın "Taranıyor..." / "Hesaplanıyor..." ve tarama yüzdesini ezmesini önle.
+      const isZeroPlaceholder = /^0\s*B\s*\/\s*0\s*B$/i.test(sizeStr) && (pctRaw === '-' || pctRaw === '0%');
+      if (!isZeroPlaceholder) {
+        hasTransferStats = true;
+        document.getElementById('stat-size').textContent    = sizeStr;
+        const pctVal = parseFloat(pctRaw);
+        document.getElementById('stat-percent').textContent = !isNaN(pctVal) ? formatPercent(pctVal) : pctRaw;
+        document.getElementById('stat-speed').textContent   = speedStr;
+        document.getElementById('stat-eta').textContent     = etaStr;
+        if (!isNaN(pctVal)) progressBar.style.width = pctVal + '%';
+      }
     }
     return;
   }
@@ -620,7 +630,14 @@ function finishSync() {
   progressBar.style.backgroundColor = 'var(--google-green)';
 
   const sizeEl = document.getElementById('stat-size');
-  if (sizeEl && (sizeEl.textContent === t('stat_scanning') || sizeEl.textContent === 'Scanning...' || sizeEl.textContent === 'Taranıyor...')) {
+  if (
+    sizeEl &&
+    (!hasTransferStats ||
+      sizeEl.textContent === t('stat_scanning') ||
+      sizeEl.textContent === 'Scanning...' ||
+      sizeEl.textContent === 'Taranıyor...' ||
+      sizeEl.textContent === '0 B / 0 B')
+  ) {
     sizeEl.textContent = t('stat_up_to_date_0b');
   }
   document.getElementById('stat-speed').textContent   = t('stat_idle');

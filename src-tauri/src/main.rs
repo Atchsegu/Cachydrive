@@ -235,9 +235,9 @@ fn clean_stale_locks() {
     }
 }
 
-/// Gürültülü veya tekrarlayan rclone satırlarını filtreleyerek GTK ana döngüsünün (main loop)
-/// saniyede binlerce IPC olayı ile kilitlenmesini önler.
-fn should_emit_rclone_line(trimmed: &str, last_progress_emit: &mut std::time::Instant) -> bool {
+/// Gürültülü ve değişmeyen dosya satırlarını filtreler; ancak rclone --progress tarafından
+/// aynı anda (mikrosaniyeler içinde) gönderilen Transferred: ve Checks: satırlarını asla düşürmez.
+fn should_emit_rclone_line(trimmed: &str) -> bool {
     if trimmed.is_empty() {
         return false;
     }
@@ -248,19 +248,6 @@ fn should_emit_rclone_line(trimmed: &str, last_progress_emit: &mut std::time::In
         || trimmed.contains("Matching file")
     {
         return false;
-    }
-
-    // Canlı ilerleme (progress) satırlarını en fazla 120ms'de bir gönder (saniyede ~8 güncelleme)
-    let is_progress = trimmed.starts_with("Transferred:")
-        || trimmed.starts_with("Checks:")
-        || trimmed.starts_with("Elapsed time:")
-        || trimmed.starts_with("* ");
-    if is_progress {
-        let now = std::time::Instant::now();
-        if now.duration_since(*last_progress_emit) < std::time::Duration::from_millis(120) {
-            return false;
-        }
-        *last_progress_emit = now;
     }
 
     true
@@ -275,8 +262,6 @@ fn stream_rclone_output<R: Read + Send + 'static>(
         let mut buf_reader = BufReader::new(reader);
         let mut line_buf = Vec::with_capacity(256);
         let mut byte = [0u8; 1];
-        let mut last_progress_emit =
-            std::time::Instant::now() - std::time::Duration::from_millis(500);
 
         loop {
             match buf_reader.read(&mut byte) {
@@ -285,7 +270,7 @@ fn stream_rclone_output<R: Read + Send + 'static>(
                         let s = String::from_utf8_lossy(&line_buf);
                         let clean = strip_ansi(&s);
                         let trimmed = clean.trim().to_string();
-                        if should_emit_rclone_line(&trimmed, &mut last_progress_emit) {
+                        if should_emit_rclone_line(&trimmed) {
                             let _ = window.emit("rclone-log", trimmed);
                         }
                     }
@@ -297,7 +282,7 @@ fn stream_rclone_output<R: Read + Send + 'static>(
                             let s = String::from_utf8_lossy(&line_buf);
                             let clean = strip_ansi(&s);
                             let trimmed = clean.trim().to_string();
-                            if should_emit_rclone_line(&trimmed, &mut last_progress_emit) {
+                            if should_emit_rclone_line(&trimmed) {
                                 let _ = window.emit("rclone-log", trimmed);
                             }
                             line_buf.clear();
@@ -913,29 +898,24 @@ mod tests {
 
     #[test]
     fn test_should_emit_rclone_line() {
-        let mut last_emit = std::time::Instant::now() - std::time::Duration::from_secs(1);
-        assert!(!should_emit_rclone_line("", &mut last_emit));
+        assert!(!should_emit_rclone_line(""));
         assert!(!should_emit_rclone_line(
-            "2026/05/10 INFO : doc.pdf: Unchanged skipping",
-            &mut last_emit
+            "2026/05/10 INFO : doc.pdf: Unchanged skipping"
         ));
         assert!(!should_emit_rclone_line(
-            "2026/05/10 DEBUG : pic.png: Size and modification time the same",
-            &mut last_emit
+            "2026/05/10 DEBUG : pic.png: Size and modification time the same"
         ));
         assert!(should_emit_rclone_line(
-            "2026/05/10 INFO : report.xlsx: Copied (new)",
-            &mut last_emit
+            "2026/05/10 INFO : report.xlsx: Copied (new)"
         ));
-        // İlk progress satırı kabul edilmeli, hemen ardından gelen ikinci progress satırı (120ms içinde) filtrelenmeli
+        // Aynı progress bloğu içinde art arda gelen Transferred ve Checks satırlarının ikisi de düşürülmemeli
         assert!(should_emit_rclone_line(
-            "Transferred: 10 MiB / 100 MiB, 10%, 5 MiB/s, ETA 18s",
-            &mut last_emit
+            "Transferred: 10 MiB / 100 MiB, 10%, 5 MiB/s, ETA 18s"
         ));
-        assert!(!should_emit_rclone_line(
-            "Transferred: 11 MiB / 100 MiB, 11%, 5 MiB/s, ETA 17s",
-            &mut last_emit
+        assert!(should_emit_rclone_line(
+            "Checks: 120 / 120, 100%, Listed 1540"
         ));
     }
 }
+
 
