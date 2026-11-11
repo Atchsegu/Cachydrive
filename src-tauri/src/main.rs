@@ -235,6 +235,37 @@ fn clean_stale_locks() {
     }
 }
 
+/// Gürültülü veya tekrarlayan rclone satırlarını filtreleyerek GTK ana döngüsünün (main loop)
+/// saniyede binlerce IPC olayı ile kilitlenmesini önler.
+fn should_emit_rclone_line(trimmed: &str, last_progress_emit: &mut std::time::Instant) -> bool {
+    if trimmed.is_empty() {
+        return false;
+    }
+
+    // Değişmeyen dosyalar için üretilen binlerce DEBUG/INFO satırını arayüze gönderme
+    if trimmed.contains("Unchanged skipping")
+        || trimmed.contains("Size and modification time the same")
+        || trimmed.contains("Matching file")
+    {
+        return false;
+    }
+
+    // Canlı ilerleme (progress) satırlarını en fazla 120ms'de bir gönder (saniyede ~8 güncelleme)
+    let is_progress = trimmed.starts_with("Transferred:")
+        || trimmed.starts_with("Checks:")
+        || trimmed.starts_with("Elapsed time:")
+        || trimmed.starts_with("* ");
+    if is_progress {
+        let now = std::time::Instant::now();
+        if now.duration_since(*last_progress_emit) < std::time::Duration::from_millis(120) {
+            return false;
+        }
+        *last_progress_emit = now;
+    }
+
+    true
+}
+
 /// Verilen okuma akışını (\n veya \r karakterlerine göre) anlık olarak satır satır okuyup arayüze gönderir
 fn stream_rclone_output<R: Read + Send + 'static>(
     reader: R,
@@ -244,6 +275,8 @@ fn stream_rclone_output<R: Read + Send + 'static>(
         let mut buf_reader = BufReader::new(reader);
         let mut line_buf = Vec::with_capacity(256);
         let mut byte = [0u8; 1];
+        let mut last_progress_emit =
+            std::time::Instant::now() - std::time::Duration::from_millis(500);
 
         loop {
             match buf_reader.read(&mut byte) {
@@ -252,7 +285,7 @@ fn stream_rclone_output<R: Read + Send + 'static>(
                         let s = String::from_utf8_lossy(&line_buf);
                         let clean = strip_ansi(&s);
                         let trimmed = clean.trim().to_string();
-                        if !trimmed.is_empty() {
+                        if should_emit_rclone_line(&trimmed, &mut last_progress_emit) {
                             let _ = window.emit("rclone-log", trimmed);
                         }
                     }
@@ -264,7 +297,7 @@ fn stream_rclone_output<R: Read + Send + 'static>(
                             let s = String::from_utf8_lossy(&line_buf);
                             let clean = strip_ansi(&s);
                             let trimmed = clean.trim().to_string();
-                            if !trimmed.is_empty() {
+                            if should_emit_rclone_line(&trimmed, &mut last_progress_emit) {
                                 let _ = window.emit("rclone-log", trimmed);
                             }
                             line_buf.clear();
@@ -297,134 +330,143 @@ fn kill_active_rclone(active_pid: &Arc<Mutex<Option<u32>>>) -> bool {
 
 // 1. Canlı Senkronizasyon Başlatma Komutu
 #[tauri::command]
-fn run_rclone_sync(
+async fn run_rclone_sync(
     window: tauri::Window,
     state: tauri::State<'_, SyncState>,
     conflict_rule: Option<String>,
 ) -> Result<String, String> {
     let active_pid = Arc::clone(&state.0);
 
-    // Çift çalışmayı önle
-    if let Ok(guard) = active_pid.lock() {
-        if guard.is_some() {
-            return Err("Senkronizasyon zaten devam ediyor.".to_string());
+    tauri::async_runtime::spawn_blocking(move || {
+        // Çift çalışmayı önle
+        if let Ok(guard) = active_pid.lock() {
+            if guard.is_some() {
+                return Err("Senkronizasyon zaten devam ediyor.".to_string());
+            }
         }
-    }
 
-    // Senkronizasyonu başlatmadan hemen önce yetim kilitleri temizle
-    clean_stale_locks();
+        // Senkronizasyonu başlatmadan hemen önce yetim kilitleri temizle
+        clean_stale_locks();
 
-    let home = std::env::var("HOME").map_err(|_| "HOME dizini bulunamadı.".to_string())?;
-    let local_drive = format!("{}/GoogleDrive", home);
+        let home = std::env::var("HOME").map_err(|_| "HOME dizini bulunamadı.".to_string())?;
+        let local_drive = format!("{}/GoogleDrive", home);
 
-    // Yerel dizinin mevcut olduğundan emin ol
-    let _ = std::fs::create_dir_all(&local_drive);
+        // Yerel dizinin mevcut olduğundan emin ol
+        let _ = std::fs::create_dir_all(&local_drive);
 
-    // Hariç tutulan öğeleri yükle ve bisync önbelleğini temiz tut
-    let excluded_items = load_excluded_items_from_disk();
-    prune_excluded_from_bisync_listings(&excluded_items);
+        // Hariç tutulan öğeleri yükle ve bisync önbelleğini temiz tut
+        let excluded_items = load_excluded_items_from_disk();
+        prune_excluded_from_bisync_listings(&excluded_items);
 
-    // Arayüzdeki çakışma kuralını rclone bisync parametresine dönüştür
-    // Path1 = ~/GoogleDrive (local), Path2 = gdrive: (remote)
-    let conflict_arg = match conflict_rule.as_deref() {
-        Some("local") | Some("path1") => "path1",
-        Some("remote") | Some("path2") => "path2",
-        _ => "newer",
-    };
-
-    let mut args: Vec<String> = vec![
-        "bisync".to_string(),
-        local_drive,
-        "gdrive:".to_string(),
-        "--recover".to_string(),
-        "--conflict-resolve".to_string(),
-        conflict_arg.to_string(),
-        "--verbose".to_string(),
-        "--progress".to_string(),
-        "--fast-list".to_string(),
-        "--drive-skip-gdocs".to_string(),
-        "--drive-fast-list-bug-fix=false".to_string(),
-        "--checkers".to_string(),
-        "64".to_string(),
-        "--drive-pacer-min-sleep".to_string(),
-        "10ms".to_string(),
-        "--drive-pacer-burst".to_string(),
-        "1000".to_string(),
-        "--check-sync=false".to_string(),
-        "--transfers".to_string(),
-        "8".to_string(),
-        "--create-empty-src-dirs".to_string(),
-    ];
-
-    for item in &excluded_items {
-        let escaped = escape_rclone_glob(&item.path);
-        let pattern = if item.is_dir {
-            format!("/{}/**", escaped)
-        } else {
-            format!("/{}", escaped)
+        // Arayüzdeki çakışma kuralını rclone bisync parametresine dönüştür
+        // Path1 = ~/GoogleDrive (local), Path2 = gdrive: (remote)
+        let conflict_arg = match conflict_rule.as_deref() {
+            Some("local") | Some("path1") => "path1",
+            Some("remote") | Some("path2") => "path2",
+            _ => "newer",
         };
-        args.push("--exclude".to_string());
-        args.push(pattern);
-    }
 
-    let mut child = Command::new("rclone")
-        .args(&args)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("Rclone başlatılamadı: {}", e))?;
+        let mut args: Vec<String> = vec![
+            "bisync".to_string(),
+            local_drive,
+            "gdrive:".to_string(),
+            "--recover".to_string(),
+            "--conflict-resolve".to_string(),
+            conflict_arg.to_string(),
+            "--verbose".to_string(),
+            "--progress".to_string(),
+            "--fast-list".to_string(),
+            "--drive-skip-gdocs".to_string(),
+            "--drive-fast-list-bug-fix=false".to_string(),
+            "--checkers".to_string(),
+            "64".to_string(),
+            "--drive-pacer-min-sleep".to_string(),
+            "10ms".to_string(),
+            "--drive-pacer-burst".to_string(),
+            "1000".to_string(),
+            "--check-sync=false".to_string(),
+            "--transfers".to_string(),
+            "8".to_string(),
+            "--create-empty-src-dirs".to_string(),
+        ];
 
-    let pid = child.id();
-    if let Ok(mut guard) = active_pid.lock() {
-        *guard = Some(pid);
-    }
-
-    let stdout_handle = child
-        .stdout
-        .take()
-        .map(|out| stream_rclone_output(out, window.clone()));
-    let stderr_handle = child
-        .stderr
-        .take()
-        .map(|err| stream_rclone_output(err, window.clone()));
-
-    thread::spawn(move || {
-        if let Some(h) = stdout_handle {
-            let _ = h.join();
+        for item in &excluded_items {
+            let escaped = escape_rclone_glob(&item.path);
+            let pattern = if item.is_dir {
+                format!("/{}/**", escaped)
+            } else {
+                format!("/{}", escaped)
+            };
+            args.push("--exclude".to_string());
+            args.push(pattern);
         }
-        if let Some(h) = stderr_handle {
-            let _ = h.join();
-        }
 
-        let status = child.wait();
+        let mut child = Command::new("rclone")
+            .args(&args)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|e| format!("Rclone başlatılamadı: {}", e))?;
 
+        let pid = child.id();
         if let Ok(mut guard) = active_pid.lock() {
-            *guard = None;
+            *guard = Some(pid);
         }
 
-        match status {
-            Ok(s) if s.success() => {
-                let _ = window.emit("rclone-done", "Başarılı");
-            }
-            _ => {
-                clean_stale_locks();
-                let _ = window.emit("rclone-error", "Hata");
-            }
-        }
-    });
+        let stdout_handle = child
+            .stdout
+            .take()
+            .map(|out| stream_rclone_output(out, window.clone()));
+        let stderr_handle = child
+            .stderr
+            .take()
+            .map(|err| stream_rclone_output(err, window.clone()));
 
-    Ok("Motor ateşlendi, canlı yayın başlıyor...".to_string())
+        thread::spawn(move || {
+            if let Some(h) = stdout_handle {
+                let _ = h.join();
+            }
+            if let Some(h) = stderr_handle {
+                let _ = h.join();
+            }
+
+            let status = child.wait();
+
+            if let Ok(mut guard) = active_pid.lock() {
+                *guard = None;
+            }
+
+            match status {
+                Ok(s) if s.success() => {
+                    let _ = window.emit("rclone-done", "Başarılı");
+                }
+                _ => {
+                    clean_stale_locks();
+                    let _ = window.emit("rclone-error", "Hata");
+                }
+            }
+        });
+
+        Ok("Motor ateşlendi, canlı yayın başlıyor...".to_string())
+    })
+    .await
+    .map_err(|e| format!("Görev başlatma hatası: {}", e))?
 }
 
 // 2. İşlemi Zorla Durdurma (Kill) Komutu
 #[tauri::command]
-fn stop_rclone_sync(state: tauri::State<'_, SyncState>) -> Result<String, String> {
-    if kill_active_rclone(&state.0) {
-        clean_stale_locks();
-        Ok("Rclone senkronizasyon işlemi durduruldu.".to_string())
-    } else {
-        Err("Çalışan Rclone işlemi bulunamadı.".to_string())
-    }
+async fn stop_rclone_sync(state: tauri::State<'_, SyncState>) -> Result<String, String> {
+    let active_pid = Arc::clone(&state.0);
+    tauri::async_runtime::spawn_blocking(move || {
+        if kill_active_rclone(&active_pid) {
+            clean_stale_locks();
+            Ok("Rclone senkronizasyon işlemi durduruldu.".to_string())
+        } else {
+            Err("Çalışan Rclone işlemi bulunamadı.".to_string())
+        }
+    })
+    .await
+    .map_err(|e| format!("Durdurma görevi hatası: {}", e))?
 }
 
 // 3. Sistem Tepsisi Dilini Güncelleme Komutu
@@ -454,50 +496,54 @@ fn update_tray_lang(app: tauri::AppHandle, lang: String) -> Result<(), String> {
 
 // 4. İlgili Yerel Google Drive Klasörünü Dosya Yöneticisinde Açma Komutu
 #[tauri::command]
-fn open_in_folder(rel_path: String) -> Result<(), String> {
-    let home = std::env::var("HOME").map_err(|_| "HOME dizini bulunamadı.".to_string())?;
-    let base_dir = std::path::PathBuf::from(&home).join("GoogleDrive");
+async fn open_in_folder(rel_path: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let home = std::env::var("HOME").map_err(|_| "HOME dizini bulunamadı.".to_string())?;
+        let base_dir = std::path::PathBuf::from(&home).join("GoogleDrive");
 
-    // Güvenlik: '..' gibi üst dizine çıkış girişimlerini filtrele
-    let clean_rel: std::path::PathBuf = std::path::Path::new(&rel_path)
-        .components()
-        .filter(|c| matches!(c, std::path::Component::Normal(_)))
-        .collect();
+        // Güvenlik: '..' gibi üst dizine çıkış girişimlerini filtrele
+        let clean_rel: std::path::PathBuf = std::path::Path::new(&rel_path)
+            .components()
+            .filter(|c| matches!(c, std::path::Component::Normal(_)))
+            .collect();
 
-    let target_path = base_dir.join(&clean_rel);
+        let target_path = base_dir.join(&clean_rel);
 
-    // Hedef doğrudan mevcut bir klasörse onu aç; dosyaysa veya silinmişse üst klasörünü bul
-    let mut dir_to_open = if target_path.is_dir() {
-        target_path
-    } else {
-        target_path
-            .parent()
-            .map(|p| p.to_path_buf())
-            .unwrap_or_else(|| base_dir.clone())
-    };
-
-    // Silinmiş alt klasörler varsa mevcut olan en yakın üst klasöre kadar çık
-    while !dir_to_open.exists() && dir_to_open.starts_with(&base_dir) {
-        if let Some(parent) = dir_to_open.parent() {
-            dir_to_open = parent.to_path_buf();
+        // Hedef doğrudan mevcut bir klasörse onu aç; dosyaysa veya silinmişse üst klasörünü bul
+        let mut dir_to_open = if target_path.is_dir() {
+            target_path
         } else {
-            break;
+            target_path
+                .parent()
+                .map(|p| p.to_path_buf())
+                .unwrap_or_else(|| base_dir.clone())
+        };
+
+        // Silinmiş alt klasörler varsa mevcut olan en yakın üst klasöre kadar çık
+        while !dir_to_open.exists() && dir_to_open.starts_with(&base_dir) {
+            if let Some(parent) = dir_to_open.parent() {
+                dir_to_open = parent.to_path_buf();
+            } else {
+                break;
+            }
         }
-    }
 
-    if !dir_to_open.exists() || !dir_to_open.starts_with(&base_dir) {
-        let _ = std::fs::create_dir_all(&base_dir);
-        dir_to_open = base_dir;
-    }
+        if !dir_to_open.exists() || !dir_to_open.starts_with(&base_dir) {
+            let _ = std::fs::create_dir_all(&base_dir);
+            dir_to_open = base_dir;
+        }
 
-    Command::new("xdg-open")
-        .arg(&dir_to_open)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|e| format!("Klasör açılamadı: {}", e))?;
+        Command::new("xdg-open")
+            .arg(&dir_to_open)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .map_err(|e| format!("Klasör açılamadı: {}", e))?;
 
-    Ok(())
+        Ok(())
+    })
+    .await
+    .map_err(|e| format!("Klasör açma görevi hatası: {}", e))?
 }
 
 // 5. Görsel Klasör Ağacı İçin Dizin İçeriğini Listeleme Komutu (Yerel + Bulut Hibrit)
@@ -662,79 +708,86 @@ async fn list_directory_items(
 
 // 6. Hariç Tutulan Öğeleri Getirme Komutu
 #[tauri::command]
-fn get_excluded_items() -> Result<Vec<ExcludedItem>, String> {
-    Ok(load_excluded_items_from_disk())
+async fn get_excluded_items() -> Result<Vec<ExcludedItem>, String> {
+    tauri::async_runtime::spawn_blocking(load_excluded_items_from_disk)
+        .await
+        .map_err(|e| format!("Filtre okuma görevi hatası: {}", e))
 }
 
 // 7. Hariç Tutulan Öğeleri Kaydetme ve İsteğe Bağlı Yerelden Silme Komutu
 #[tauri::command]
-fn save_excluded_items(
+async fn save_excluded_items(
     items: Vec<ExcludedItem>,
     delete_local_paths: Vec<String>,
     state: tauri::State<'_, SyncState>,
 ) -> Result<SaveExclusionsResult, String> {
-    if let Ok(guard) = state.0.lock() {
-        if guard.is_some() {
-            return Err(
-                "Aktif bir senkronizasyon çalışırken filtreler değiştirilemez. Lütfen önce işlemi durdurun veya bitmesini bekleyin."
-                    .to_string(),
-            );
-        }
-    }
-
-    let mut clean_items: Vec<ExcludedItem> = Vec::new();
-    for item in items {
-        let clean = sanitize_rel_path(&item.path);
-        if !clean.is_empty() && !clean_items.iter().any(|x| x.path == clean) {
-            clean_items.push(ExcludedItem {
-                path: clean,
-                is_dir: item.is_dir,
-            });
-        }
-    }
-
-    // 1. Önce filtre listesini diske kaydet ve bisync .lst önbelleğinden çıkar (Güvenlik sırası!)
-    save_excluded_items_to_disk(&clean_items)?;
-    prune_excluded_from_bisync_listings(&clean_items);
-
-    // 2. Kullanıcı "bilgisayarımdan da sil" seçeneğini işaretlediyse sadece hariç tutulan yerel öğeleri sil
-    let mut deleted_local_count = 0usize;
-    if !delete_local_paths.is_empty() {
-        let home = std::env::var("HOME").map_err(|_| "HOME dizini bulunamadı.".to_string())?;
-        let base_dir = std::path::PathBuf::from(&home).join("GoogleDrive");
-
-        for raw_path in delete_local_paths {
-            let clean = sanitize_rel_path(&raw_path);
-            if clean.is_empty() {
-                continue;
+    let active_pid = Arc::clone(&state.0);
+    tauri::async_runtime::spawn_blocking(move || {
+        if let Ok(guard) = active_pid.lock() {
+            if guard.is_some() {
+                return Err(
+                    "Aktif bir senkronizasyon çalışırken filtreler değiştirilemez. Lütfen önce işlemi durdurun veya bitmesini bekleyin."
+                        .to_string(),
+                );
             }
+        }
 
-            // Güvenlik kontrolü: Yalnızca gerçekten hariç tutulmuş (veya üst klasörü hariç tutulmuş) bir öğe silinebilir
-            let is_excluded = clean_items.iter().any(|ex| {
-                ex.path == clean || (ex.is_dir && clean.starts_with(&format!("{}/", ex.path)))
-            });
-            if !is_excluded {
-                continue;
+        let mut clean_items: Vec<ExcludedItem> = Vec::new();
+        for item in items {
+            let clean = sanitize_rel_path(&item.path);
+            if !clean.is_empty() && !clean_items.iter().any(|x| x.path == clean) {
+                clean_items.push(ExcludedItem {
+                    path: clean,
+                    is_dir: item.is_dir,
+                });
             }
+        }
 
-            let target = base_dir.join(&clean);
-            if target.starts_with(&base_dir) && target != base_dir && target.exists() {
-                let res = if target.is_dir() {
-                    std::fs::remove_dir_all(&target)
-                } else {
-                    std::fs::remove_file(&target)
-                };
-                if res.is_ok() {
-                    deleted_local_count += 1;
+        // 1. Önce filtre listesini diske kaydet ve bisync .lst önbelleğinden çıkar (Güvenlik sırası!)
+        save_excluded_items_to_disk(&clean_items)?;
+        prune_excluded_from_bisync_listings(&clean_items);
+
+        // 2. Kullanıcı "bilgisayarımdan da sil" seçeneğini işaretlediyse sadece hariç tutulan yerel öğeleri sil
+        let mut deleted_local_count = 0usize;
+        if !delete_local_paths.is_empty() {
+            let home = std::env::var("HOME").map_err(|_| "HOME dizini bulunamadı.".to_string())?;
+            let base_dir = std::path::PathBuf::from(&home).join("GoogleDrive");
+
+            for raw_path in delete_local_paths {
+                let clean = sanitize_rel_path(&raw_path);
+                if clean.is_empty() {
+                    continue;
+                }
+
+                // Güvenlik kontrolü: Yalnızca gerçekten hariç tutulmuş (veya üst klasörü hariç tutulmuş) bir öğe silinebilir
+                let is_excluded = clean_items.iter().any(|ex| {
+                    ex.path == clean || (ex.is_dir && clean.starts_with(&format!("{}/", ex.path)))
+                });
+                if !is_excluded {
+                    continue;
+                }
+
+                let target = base_dir.join(&clean);
+                if target.starts_with(&base_dir) && target != base_dir && target.exists() {
+                    let res = if target.is_dir() {
+                        std::fs::remove_dir_all(&target)
+                    } else {
+                        std::fs::remove_file(&target)
+                    };
+                    if res.is_ok() {
+                        deleted_local_count += 1;
+                    }
                 }
             }
         }
-    }
 
-    Ok(SaveExclusionsResult {
-        excluded_count: clean_items.len(),
-        deleted_local_count,
+        Ok(SaveExclusionsResult {
+            excluded_count: clean_items.len(),
+            deleted_local_count,
+        })
     })
+    .await
+    .map_err(|e| format!("Filtre kaydetme görevi hatası: {}", e))?
 }
 
 fn main() {
@@ -749,8 +802,8 @@ fn main() {
     tauri::Builder::default()
         .manage(SyncState(sync_pid))
         .setup(move |app| {
-            // Başlangıçta kalmış olabilecek kilit dosyalarını temizle
-            clean_stale_locks();
+            // Başlangıçta kalmış olabilecek kilit dosyalarını arka planda temizle
+            thread::spawn(clean_stale_locks);
 
             // 3. SİSTEM TEPSİSİ MENÜSÜNÜ OLUŞTURMA (Varsayılan İngilizce)
             let show_i = MenuItem::with_id(app, "show", "Show Interface", true, None::<&str>)?;
@@ -771,6 +824,7 @@ fn main() {
                 .on_menu_event(move |app, event| match event.id.as_ref() {
                     "show" => {
                         if let Some(window) = app.get_webview_window("main") {
+                            let _ = window.unminimize();
                             let _ = window.show();
                             let _ = window.set_focus();
                         }
@@ -797,6 +851,7 @@ fn main() {
                     {
                         let app = tray.app_handle();
                         if let Some(window) = app.get_webview_window("main") {
+                            let _ = window.unminimize();
                             let _ = window.show();
                             let _ = window.set_focus();
                         }
@@ -810,10 +865,16 @@ fn main() {
             Ok(())
         })
         // 4. "X" KAPATMA TUŞUNA BASILINCA UYGULAMAYI KAPATMA, GİZLE!
+        // GTK HeaderBar kapatma butonunun button-release-event sinyalini tamamlayıp pointer grab
+        // kilidini temizce bırakabilmesi için gizleme işlemini 25ms gecikmeyle çalıştırıyoruz.
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                let _ = window.hide();
-                api.prevent_close(); // Uygulamanın ölmesini engeller
+                api.prevent_close();
+                let win = window.clone();
+                thread::spawn(move || {
+                    thread::sleep(std::time::Duration::from_millis(25));
+                    let _ = win.hide();
+                });
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -849,4 +910,32 @@ mod tests {
             "Yedek \\[2026\\] \\*test\\?"
         );
     }
+
+    #[test]
+    fn test_should_emit_rclone_line() {
+        let mut last_emit = std::time::Instant::now() - std::time::Duration::from_secs(1);
+        assert!(!should_emit_rclone_line("", &mut last_emit));
+        assert!(!should_emit_rclone_line(
+            "2026/05/10 INFO : doc.pdf: Unchanged skipping",
+            &mut last_emit
+        ));
+        assert!(!should_emit_rclone_line(
+            "2026/05/10 DEBUG : pic.png: Size and modification time the same",
+            &mut last_emit
+        ));
+        assert!(should_emit_rclone_line(
+            "2026/05/10 INFO : report.xlsx: Copied (new)",
+            &mut last_emit
+        ));
+        // İlk progress satırı kabul edilmeli, hemen ardından gelen ikinci progress satırı (120ms içinde) filtrelenmeli
+        assert!(should_emit_rclone_line(
+            "Transferred: 10 MiB / 100 MiB, 10%, 5 MiB/s, ETA 18s",
+            &mut last_emit
+        ));
+        assert!(!should_emit_rclone_line(
+            "Transferred: 11 MiB / 100 MiB, 11%, 5 MiB/s, ETA 17s",
+            &mut last_emit
+        ));
+    }
 }
+
